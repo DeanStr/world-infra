@@ -7,7 +7,7 @@ Scope: phases 0, 1, 2, and 3 from
 
 Conclusion: phases 0-3 are implemented and locally canaried first as an
 extraction spike, then against the canonical remote release-candidate source
-`https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.3`.
+`https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.4`.
 They are not final-release complete until remote product canaries pass or have
 approved dated deferrals.
 
@@ -38,7 +38,7 @@ Evidence:
 - `scripts/pinned-product-deps.sh` generates exact-revision product dependency
   entries after the shared repo has a commit.
 - Canonical remote exists at `https://github.com/DeanStr/world-infra.git`.
-- Release-candidate tag exists: `world-infra-v0.1.0-rc.3`.
+- Release-candidate tag exists: `world-infra-v0.1.0-rc.4`.
 
 Local verification recorded:
 
