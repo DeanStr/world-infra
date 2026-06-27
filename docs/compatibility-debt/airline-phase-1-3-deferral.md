@@ -18,13 +18,14 @@ adoption for `world-env`,
 `world-clock-core`, and `delivery-core`, recorded in
 `docs/consumer-canaries/airline-phase-1-3-local-path.md`.
 
-The remaining Airline phase 1-3 work is release-candidate consumption and remote
-verification. ReadyCI remote wrappers reached the affected Rust rules, but they
-failed at Cargo metadata because the remote workspace cannot resolve local
-`/world-infra` path dependencies. The shared repository is now published at
-`https://github.com/DeanStr/world-infra.git`, and products can consume the
-`world-infra-v0.1.0-rc.2` candidate through that canonical remote. The remaining
-work is rerunning Airline ReadyCI against that remote immutable source.
+The remaining Airline phase 1-3 work is remote verification. ReadyCI remote
+wrappers originally reached the affected Rust rules but failed at Cargo metadata
+because the remote workspace could not resolve local `/world-infra` path
+dependencies. That class of blocker is addressed by publishing the shared
+repository at `https://github.com/DeanStr/world-infra.git` and repinning products
+to the `world-infra-v0.1.0-rc.3` canonical exact revision. Subsequent ReadyCI
+attempts reached the remote runner but failed before compilation because the
+runner could not resolve `github.com` while Cargo fetched `world-infra`.
 
 Airline telemetry is no longer deferred: the local canary upgraded `loco-app` to
 the shared OpenTelemetry `0.32` stack through `world-telemetry` while preserving
