@@ -23,7 +23,7 @@ verification. ReadyCI remote wrappers reached the affected Rust rules, but they
 failed at Cargo metadata because the remote workspace cannot resolve local
 `/world-infra` path dependencies. The shared repository is now published at
 `https://github.com/DeanStr/world-infra.git`, and products can consume the
-`world-infra-v0.1.0-rc.1` candidate through that canonical remote. The remaining
+`world-infra-v0.1.0-rc.2` candidate through that canonical remote. The remaining
 work is rerunning Airline ReadyCI against that remote immutable source.
 
 Airline telemetry is no longer deferred: the local canary upgraded `loco-app` to

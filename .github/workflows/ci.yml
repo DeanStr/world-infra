@@ -21,7 +21,7 @@ jobs:
       - name: Feature matrix
         run: |
           cargo install cargo-hack --locked
-          cargo hack test --workspace --feature-powerset --no-dev-deps
+          cargo hack test --workspace --feature-powerset
       - name: Dependency audit
         run: |
           cargo install cargo-audit --locked
