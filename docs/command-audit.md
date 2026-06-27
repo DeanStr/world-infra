@@ -79,7 +79,7 @@ Observed on 2026-06-28:
 
 - `scripts/pinned-product-deps.sh` generated exact-revision dependency entries
   for the canonical `https://github.com/DeanStr/world-infra.git` remote after
-  the release-candidate tag `world-infra-v0.1.0-rc.4` was created.
+  the release-candidate tag `world-infra-v0.1.0-rc.5` was created.
 - Airline `make remote-check-touched` and `make remote-rust-check-pkg
   P=airline-utils` reached ReadyCI but failed at Cargo metadata because local
   `/world-infra` path dependencies are not available in the remote workspace.
