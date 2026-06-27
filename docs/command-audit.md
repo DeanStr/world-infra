@@ -78,10 +78,10 @@ Observed on 2026-06-28:
 Observed on 2026-06-28:
 
 - `scripts/pinned-product-deps.sh` generated exact-revision dependency entries
-  for local canaries after the initial `world-infra` commit
-  `a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5`.
+  for the canonical `https://github.com/DeanStr/world-infra.git` remote after
+  the release-candidate tag `world-infra-v0.1.0-rc.1` was created.
 - Airline `make remote-check-touched` and `make remote-rust-check-pkg
   P=airline-utils` reached ReadyCI but failed at Cargo metadata because local
   `/world-infra` path dependencies are not available in the remote workspace.
-  This confirms remote canaries require exact-revision git dependencies from a
+  This confirmed remote canaries require exact-revision git dependencies from a
   canonical remote URL, not sibling local paths or local `file://` URLs.

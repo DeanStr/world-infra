@@ -16,8 +16,9 @@ Candidate revision or tag:
 
 - local extraction spike: path dependency from `/home/dean/chairman` to
   `/home/dean/world-infra`;
-- release-candidate local git proof:
-  `file:///home/dean/world-infra?rev=a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5`.
+- release-candidate remote git proof:
+  `https://github.com/DeanStr/world-infra.git` tag
+  `world-infra-v0.1.0-rc.1`.
 
 Consumer: Chairman.
 
@@ -56,8 +57,8 @@ Results:
 - `chairman-worker`: 7 tests passed; `seed-dev-world` compiled.
 - `chairman-game-db`: 65 tests passed, 1 ignored Postgres-backed test.
 - Focused clippy gate passed with `-D warnings`.
-- Exact-revision rerun compiled shared crates from
-  `file:///home/dean/world-infra?rev=a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5#a3882e8c`.
+- Exact-revision rerun compiled shared crates from the remote
+  `world-infra-v0.1.0-rc.1` candidate.
 - Dependency tree confirms `chairman-api`, `chairman-worker`, and
   `chairman-game-db` consume the pinned git source for `world-telemetry`,
   `delivery-core`, and `tenant-scope-sqlx`.
@@ -69,7 +70,6 @@ Failures and disposition:
 
 Release decision:
 
-- Suitable as local extraction-spike and exact local git revision evidence.
-- Not suitable as remote release consumption until the same revision is
-  available from a canonical remote URL or tag and the product branch uses that
-  remote, immutable source.
+- Suitable as local extraction-spike and remote exact-revision evidence.
+- Final release still requires shared CI and both product canaries or approved
+  dated deferrals.

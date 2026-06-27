@@ -10,9 +10,9 @@ Affected crate/version:
 
 Reason:
 
-Chairman has completed local-path and exact local git revision canary adoption
-for phase 1-3 surfaces. Airline now has local-path and exact local git revision
-canary adoption for `world-env`,
+Chairman has completed local-path and remote exact-revision canary adoption for
+phase 1-3 surfaces. Airline now has local-path and remote exact-revision canary
+adoption for `world-env`,
 `world-test-lite`, `world-telemetry`, `world-identity-core`,
 `idempotency-core`, `http-primitives`, `rate-limit-core`, `tenant-scope-sqlx`,
 `world-clock-core`, and `delivery-core`, recorded in
@@ -21,11 +21,10 @@ canary adoption for `world-env`,
 The remaining Airline phase 1-3 work is release-candidate consumption and remote
 verification. ReadyCI remote wrappers reached the affected Rust rules, but they
 failed at Cargo metadata because the remote workspace cannot resolve local
-`/world-infra` path dependencies. The shared repository now has a local
-release-candidate commit,
-`a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5`, and products can consume it through
-an exact `file://` git revision locally. Remote verification still requires a
-canonical `world-infra` remote URL or tag that ReadyCI can fetch.
+`/world-infra` path dependencies. The shared repository is now published at
+`https://github.com/DeanStr/world-infra.git`, and products can consume the
+`world-infra-v0.1.0-rc.1` candidate through that canonical remote. The remaining
+work is rerunning Airline ReadyCI against that remote immutable source.
 
 Airline telemetry is no longer deferred: the local canary upgraded `loco-app` to
 the shared OpenTelemetry `0.32` stack through `world-telemetry` while preserving
@@ -49,14 +48,11 @@ Compatibility being preserved:
   operator workflows. The current canary preserves these locally while sharing
   retry-backoff mechanics, claim envelopes, finalization traits, and outcome
   vocabulary.
-- Airline remote verification is intentionally not treated as passing while
-  products use local path or local `file://` dependencies unavailable to ReadyCI.
+- Airline remote verification is intentionally not treated as passing until
+  ReadyCI succeeds against the canonical remote immutable source.
 
 What makes this obsolete:
 
-- `world-infra` has a canonical remote release-candidate revision or tag;
-- Chairman and Airline product dependencies are patched to that remote immutable
-  git tag or exact revision; and
 - Airline remote package/touched gates pass or are replaced by an approved,
   dated remote-verification deferral for the release candidate.
 

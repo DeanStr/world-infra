@@ -17,8 +17,9 @@ Candidate revision or tag:
 
 - local extraction spike: path dependency from `/home/dean/airline` to
   `/home/dean/world-infra`;
-- release-candidate local git proof:
-  `file:///home/dean/world-infra?rev=a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5`.
+- release-candidate remote git proof:
+  `https://github.com/DeanStr/world-infra.git` tag
+  `world-infra-v0.1.0-rc.1`.
 
 Consumer: Airline.
 
@@ -136,8 +137,8 @@ Results:
 - `loco-app-it --test rate_limit_redis --features tc`: 1 test passed.
 - `sim-engine db::rls`: 1 focused tenant-scope statement test passed.
 - Focused clippy gate passed with `-D warnings`.
-- Exact-revision rerun compiled shared crates from
-  `file:///home/dean/world-infra?rev=a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5#a3882e8c`.
+- Exact-revision rerun compiled shared crates from the remote
+  `world-infra-v0.1.0-rc.1` candidate.
 - Dependency tree confirms direct consumption of the pinned git source for the
   canaried crates, including `world-telemetry`, `delivery-core`, and
   `tenant-scope-sqlx`.
@@ -171,17 +172,16 @@ Failures and disposition:
   tests after compiling; the concrete `next_cycle_start_time` filter was rerun
   and passed.
 - ReadyCI remote wrappers do not mount the sibling `/home/dean/world-infra`
-  workspace as `/world-infra`. The exact local `file://` git revision proves
-  immutable local consumption, but remote canaries still require a canonical
-  remote URL for `world-infra`.
+  workspace as `/world-infra`. Product branches now use the canonical
+  `https://github.com/DeanStr/world-infra.git` source for release-candidate
+  verification.
 
 Release decision:
 
-- Suitable as local extraction-spike and exact local git revision evidence for
+- Suitable as local extraction-spike and remote exact-revision evidence for
   the canaried crates.
 - `delivery-core` evidence covers retry backoff mechanics, shared claim
   envelopes, shared finalization traits, and shared outcome vocabulary for
   Airline notification delivery.
-- Not suitable as remote release consumption until the same revision is
-  available from a canonical remote URL or tag and Airline runs its remote
-  package/touched gates against that remote, immutable source.
+- Final release still requires Airline remote package/touched gates against the
+  canonical remote immutable source, or an approved dated deferral.

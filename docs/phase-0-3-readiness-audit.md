@@ -6,11 +6,10 @@ Scope: phases 0, 1, 2, and 3 from
 `/home/dean/chairman/docs/world-infra-unified-extraction-plan.md`.
 
 Conclusion: phases 0-3 are implemented and locally canaried first as an
-extraction spike, then against exact local git revision
-`a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5`. They are not remote
-release-candidate complete until `world-infra` has a canonical remote URL or
-tag, products consume that remote immutable source, and remote product canaries
-pass or have approved dated deferrals.
+extraction spike, then against the canonical remote release-candidate source
+`https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.1`.
+They are not final-release complete until remote product canaries pass or have
+approved dated deferrals.
 
 ## Phase 0: Foundation
 
@@ -38,8 +37,8 @@ Evidence:
   secret-scanning tools.
 - `scripts/pinned-product-deps.sh` generates exact-revision product dependency
   entries after the shared repo has a commit.
-- Initial release-candidate commit exists:
-  `a3882e8cca0bf8a4c38f1c2868e52a6031f70dd5`.
+- Canonical remote exists at `https://github.com/DeanStr/world-infra.git`.
+- Release-candidate tag exists: `world-infra-v0.1.0-rc.1`.
 
 Local verification recorded:
 
@@ -53,14 +52,13 @@ Local verification recorded:
 
 Remaining before release-candidate or committed product consumption:
 
-- Publish or otherwise expose `world-infra` through a canonical remote URL or
-  tag. The local exact `file://` revision proves immutable local consumption,
-  but it is not fetchable by remote product CI.
+- Run the remote product canaries against the canonical remote immutable source
+  and record ReadyCI run IDs.
 - Run CI or local equivalents for `cargo-deny`, `cargo-hack`,
   `cargo-semver-checks`, and `gitleaks`. These tools are configured in CI but
   were unavailable locally on 2026-06-28.
-- Fill repository/homepage/documentation package metadata after the canonical
-  remote URL exists, if those fields are desired for publication.
+- Repository package metadata points at
+  `https://github.com/DeanStr/world-infra`.
 
 ## Phase 1: Low-Risk Proof Of Reuse
 
@@ -209,29 +207,23 @@ Recorded local gates:
   `cargo test -p loco-app notification_delivery_backoff`,
   `cargo test -p loco-app notification_delivery`, and focused clippy passed.
 
-## Release-Candidate Gap
+## Final Release Gap
 
-The code and local canary evidence are sufficient for an extraction spike and an
-exact local git revision canary, but not for remote product adoption.
+The code and local canary evidence are sufficient for an extraction spike and a
+remote exact-revision release-candidate canary, but not for final release.
 
 Observed blocker:
 
-- `world-infra` has a local release-candidate commit but no configured remote
-  URL.
-- Product checkouts currently consume a local `file://` exact git revision.
-- Airline ReadyCI runs reached remote execution but failed during Cargo metadata
-  resolution because `/world-infra` is not present in the remote workspace.
+- Airline ReadyCI runs previously reached remote execution but failed during
+  Cargo metadata resolution because `/world-infra` was not present in the remote
+  workspace.
+- Product checkouts now need to rerun ReadyCI against
+  `https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.1`.
 
 Required next release steps:
 
-1. Publish or push the reviewed `world-infra` release-candidate commit to a
-   canonical remote.
-2. Run `scripts/pinned-product-deps.sh --url <canonical-world-infra-url> --rev
-   <candidate-commit>`.
-3. Patch Chairman and Airline product branches to exact-revision git
-   dependencies using that canonical remote URL.
-4. Run the shared CI gates and the product canary commands recorded in
+1. Run the shared CI gates and the product canary commands recorded in
    `docs/consumer-canaries/`.
-5. Record exact revisions, remote run IDs, failures, and disposition.
-6. Tag final releases only after shared CI is green and both product canaries
+2. Record exact revisions, remote run IDs, failures, and disposition.
+3. Tag final releases only after shared CI is green and both product canaries
    pass, or after approved dated deferrals are recorded.
