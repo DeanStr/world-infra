@@ -1,0 +1,18 @@
+[package]
+name = "rate-limit-core"
+description = "Policy-free rate-limit backend mechanics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[features]
+default = []
+redis = ["dep:redis"]
+
+[dependencies]
+redis = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "world-identity-core"
+description = "Incarnation-aware world identity value types."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[lints]
+workspace = true

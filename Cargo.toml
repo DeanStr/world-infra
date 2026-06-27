@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "crates/world-telemetry",
+    "crates/world-env",
+    "crates/world-test-lite",
+    "crates/world-identity-core",
+    "crates/http-primitives",
+    "crates/idempotency-core",
+    "crates/world-clock-core",
+    "crates/rate-limit-core",
+    "crates/tenant-scope-sqlx",
+    "crates/delivery-core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[workspace.dependencies]
+futures-core = "0.3"
+opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace"] }
+redis = { version = "1.2", default-features = false, features = ["aio", "script", "tokio-comp"] }
+serde = { version = "1.0", features = ["derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+time = { version = "0.3", default-features = false, features = ["formatting", "parsing"] }
+tokio = { version = "1.48", default-features = false, features = ["macros", "rt", "time"] }
+tracing = "0.1"
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

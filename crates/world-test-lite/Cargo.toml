@@ -1,0 +1,14 @@
+[package]
+name = "world-test-lite"
+description = "Dependency-light test helpers for shared persistent-world crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

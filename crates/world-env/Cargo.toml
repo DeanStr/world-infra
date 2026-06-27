@@ -1,0 +1,11 @@
+[package]
+name = "world-env"
+description = "Product-neutral environment parsing primitives for persistent-world services."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "idempotency-core"
+description = "Typed construction and validation for new idempotency keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+world-identity-core = { path = "../world-identity-core", default-features = false }
+
+[lints]
+workspace = true

@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --no-default-features
+      - run: cargo test --workspace --all-features --examples
+      - run: cargo doc --workspace --all-features --no-deps
+      - name: Feature matrix
+        run: |
+          cargo install cargo-hack --locked
+          cargo hack test --workspace --feature-powerset --no-dev-deps
+      - name: Dependency audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+      - name: License and dependency policy
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+      - name: Public API semver surface
+        run: |
+          cargo install cargo-semver-checks --locked
+          cargo semver-checks check-release --workspace --baseline-rev HEAD~1 || true
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gitleaks/gitleaks-action@v2
