@@ -10,7 +10,7 @@ delivery-facing slice of `notification-core`. `event-fanout` remains deferred.
 The shared crates contain only product-neutral event envelope metadata,
 notification delivery metadata, and validators. Chairman and Airline
 notification canaries target exact `world-infra` revision
-`6c3887d69080fe2e502053db8b94db5d99927f85`.
+`2b4527c87d12baa5bc485bde2e1fdf02ba1b9be9`.
 
 ## world-event-core
 
@@ -141,9 +141,9 @@ Required future gate:
 
 Phase 4 release-candidate evidence:
 
-1. shared release source: `6c3887d69080fe2e502053db8b94db5d99927f85`;
-2. release tag: `world-infra-v0.1.0-rc.10`;
-3. Chairman canary commit: `88b77e07fe72330c6fc8db838d66885561fb9210`;
-4. Airline canary commit: `740060455917346da36aecaee45ce47c2c0ec03f`;
+1. shared release source: `2b4527c87d12baa5bc485bde2e1fdf02ba1b9be9`;
+2. release tag: `world-infra-v0.1.0-rc.11`;
+3. Chairman canary commit: `c664fc699abc8a7edf345feb44e34a728d7dcd36`;
+4. Airline canary commit: `6ac16b3a8dc1320f97c140ca579aeb76f4d0785c`;
 5. release review confirms `event-fanout` remains deferred and
    `notification-core` remains delivery-metadata-only.
