@@ -5,7 +5,7 @@
 //! provider clients. It provides shared delivery metadata that products can map
 //! onto their own notification systems.
 
-use std::{error::Error, fmt, str::FromStr, time::Duration};
+use std::{error::Error, fmt, num::NonZeroU32, str::FromStr, time::Duration};
 
 use delivery_core::DeliveryAttemptOutcome;
 
@@ -40,6 +40,8 @@ pub enum NotificationError {
     UnknownChannel(String),
     /// Delivery version must be positive.
     InvalidDeliveryVersion,
+    /// Delivery attempt must be positive.
+    InvalidAttempt,
 }
 
 impl fmt::Display for NotificationError {
@@ -54,6 +56,7 @@ impl fmt::Display for NotificationError {
             }
             Self::UnknownChannel(channel) => write!(f, "unknown notification channel {channel:?}"),
             Self::InvalidDeliveryVersion => f.write_str("delivery version must be positive"),
+            Self::InvalidAttempt => f.write_str("delivery attempt must be positive"),
         }
     }
 }
@@ -214,6 +217,48 @@ impl FromStr for NotificationTarget {
     }
 }
 
+/// Positive 1-based provider attempt number for a notification claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NotificationAttempt(NonZeroU32);
+
+impl NotificationAttempt {
+    /// Construct a provider attempt number.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError::InvalidAttempt`] for zero.
+    pub const fn new(value: u32) -> Result<Self, NotificationError> {
+        match NonZeroU32::new(value) {
+            Some(value) => Ok(Self(value)),
+            None => Err(NotificationError::InvalidAttempt),
+        }
+    }
+
+    /// Return the raw attempt number.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+
+    /// Return the attempt number as a SQL-friendly u32.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl From<NonZeroU32> for NotificationAttempt {
+    fn from(value: NonZeroU32) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Display for NotificationAttempt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Metadata common to a claimed notification delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationDeliveryContext<Id> {
@@ -224,7 +269,7 @@ pub struct NotificationDeliveryContext<Id> {
     /// Version of the product-owned notification item.
     pub delivery_version: DeliveryVersion,
     /// Current 1-based provider attempt number for this claim.
-    pub attempt: u32,
+    pub attempt: NotificationAttempt,
 }
 
 /// Provider attempt outcome before product persistence finalization.
@@ -286,6 +331,15 @@ mod tests {
         assert_eq!(
             DeliveryVersion::from_i32(-1),
             Err(NotificationError::InvalidDeliveryVersion)
+        );
+    }
+
+    #[test]
+    fn validates_notification_attempt() {
+        assert_eq!(NotificationAttempt::new(2).unwrap().as_u32(), 2);
+        assert_eq!(
+            NotificationAttempt::new(0),
+            Err(NotificationError::InvalidAttempt)
         );
     }
 
