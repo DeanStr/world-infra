@@ -26,7 +26,7 @@ Cargo metadata because the remote workspace could not resolve local
 `/world-infra` path dependencies. That class of blocker is addressed by
 publishing the shared repository at
 `https://github.com/DeanStr/world-infra.git` and repinning products to the
-`world-infra-v0.1.0-rc.6` canonical exact revision.
+`world-infra-v0.1.0-rc.7` canonical exact revision.
 
 Subsequent exact-revision ReadyCI attempts submitted with no usable network path
 failed before compilation while Cargo fetched `world-infra` from `github.com`.

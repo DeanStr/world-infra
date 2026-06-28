@@ -80,7 +80,7 @@ Observed on 2026-06-28:
 
 - `scripts/pinned-product-deps.sh` generated exact-revision dependency entries
   for the canonical `https://github.com/DeanStr/world-infra.git` remote after
-  the release-candidate tag `world-infra-v0.1.0-rc.6` was created.
+  the release-candidate tag `world-infra-v0.1.0-rc.7` was created.
 - Airline `make remote-check-touched` and `make remote-rust-check-pkg
   P=airline-utils` reached ReadyCI but failed at Cargo metadata because local
   `/world-infra` path dependencies are not available in the remote workspace.
@@ -106,5 +106,5 @@ Observed on 2026-06-28:
 - Verbose full-package ReadyCI runs for `loco-app` and `sim-engine` reached Rust
   work but were cancelled by ReadyCI log-delivery timeouts. Quiet or focused
   network-enabled reruns provided the dependency-fetching canary evidence.
-- Shared repository release evidence for `world-infra-v0.1.0-rc.6` is the local
+- Shared repository release evidence for `world-infra-v0.1.0-rc.7` is the local
   shared gate set plus the product exact-revision canaries recorded here.

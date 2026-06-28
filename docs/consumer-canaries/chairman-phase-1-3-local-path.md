@@ -18,13 +18,13 @@ Candidate revision or tag:
   `/home/dean/world-infra`;
 - release-candidate remote git proof:
   `https://github.com/DeanStr/world-infra.git` tag
-  `world-infra-v0.1.0-rc.6`.
+  `world-infra-v0.1.0-rc.7`.
 
 Consumer: Chairman.
 
 Owner: Chairman world-infra DRI.
 
-Date: 2026-06-27; exact-revision rc6 rerun on 2026-06-28.
+Date: 2026-06-27; exact-revision rc7 rerun on 2026-06-28.
 
 Scope:
 
@@ -53,7 +53,7 @@ cargo tree -p chairman-game-db -i tenant-scope-sqlx
 
 Results:
 
-- 2026-06-28 rc6 focused gate: `cargo fmt --check` passed; `chairman-api`
+- 2026-06-28 rc7 focused gate: `cargo fmt --check` passed; `chairman-api`
   16 tests passed; `chairman-worker` 7 tests passed; `seed-dev-world`
   compiled.
 - Earlier extraction-spike evidence:
@@ -62,7 +62,7 @@ Results:
 - `chairman-game-db`: 65 tests passed, 1 ignored Postgres-backed test.
 - Focused clippy gate passed with `-D warnings`.
 - Exact-revision rerun compiled shared crates from the remote
-  `world-infra-v0.1.0-rc.6` candidate.
+  `world-infra-v0.1.0-rc.7` candidate.
 - Dependency tree confirms `chairman-api`, `chairman-worker`, and
   `chairman-game-db` consume the pinned git source for `world-telemetry`,
   `delivery-core`, and `tenant-scope-sqlx`.

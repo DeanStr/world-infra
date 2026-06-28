@@ -440,6 +440,7 @@ fn is_public_unicast_v6(addr: Ipv6Addr) -> bool {
         || addr.is_multicast()
         || is_unique_local_v6(addr)
         || is_unicast_link_local_v6(addr)
+        || is_site_local_v6(addr)
         || is_documentation_v6(addr))
 }
 
@@ -449,6 +450,10 @@ fn is_unique_local_v6(addr: Ipv6Addr) -> bool {
 
 fn is_unicast_link_local_v6(addr: Ipv6Addr) -> bool {
     (addr.segments()[0] & 0xffc0) == 0xfe80
+}
+
+fn is_site_local_v6(addr: Ipv6Addr) -> bool {
+    (addr.segments()[0] & 0xffc0) == 0xfec0
 }
 
 fn is_documentation_v6(addr: Ipv6Addr) -> bool {
@@ -720,6 +725,7 @@ mod tests {
         assert!(!is_public_bind("224.0.0.1".parse().unwrap()));
         assert!(!is_public_bind("192.0.2.1".parse().unwrap()));
         assert!(!is_public_bind("fe80::1".parse().unwrap()));
+        assert!(!is_public_bind("fec0::1".parse().unwrap()));
         assert!(!is_public_bind("ff02::1".parse().unwrap()));
         assert!(!is_public_bind("2001:db8::1".parse().unwrap()));
         assert!(!is_public_bind("::ffff:127.0.0.1".parse().unwrap()));
