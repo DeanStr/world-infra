@@ -18,13 +18,15 @@ Candidate revision or tag:
   `/home/dean/world-infra`;
 - release-candidate remote git proof:
   `https://github.com/DeanStr/world-infra.git` tag
-  `world-infra-v0.1.0-rc.7`.
+  `world-infra-v0.1.0-rc.7`;
+- follow-up exact-revision hardening proof:
+  `3cd8b9f9d37c4135c076da1167f73120d96b12d1`.
 
 Consumer: Chairman.
 
 Owner: Chairman world-infra DRI.
 
-Date: 2026-06-27; exact-revision rc7 rerun on 2026-06-28.
+Date: 2026-06-27; exact-revision rc7 and post-rc7 reruns on 2026-06-28.
 
 Scope:
 
@@ -62,7 +64,8 @@ Results:
 - `chairman-game-db`: 65 tests passed, 1 ignored Postgres-backed test.
 - Focused clippy gate passed with `-D warnings`.
 - Exact-revision rerun compiled shared crates from the remote
-  `world-infra-v0.1.0-rc.7` candidate.
+  `world-infra-v0.1.0-rc.7` candidate, then from the post-rc7 exact revision
+  `3cd8b9f9d37c4135c076da1167f73120d96b12d1`.
 - Dependency tree confirms `chairman-api`, `chairman-worker`, and
   `chairman-game-db` consume the pinned git source for `world-telemetry`,
   `delivery-core`, and `tenant-scope-sqlx`.

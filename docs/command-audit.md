@@ -70,7 +70,8 @@ Observed on 2026-06-28:
 - `cargo-hack`: not installed locally when rechecked on 2026-06-28; configured
   in shared CI for feature matrix coverage.
 - `cargo-semver-checks`: not installed locally when rechecked on 2026-06-28;
-  configured in shared CI as an initial non-blocking baseline check.
+  configured in shared CI as a blocking baseline check against
+  `world-infra-v0.1.0-rc.7`.
 - `gitleaks`: not installed locally when rechecked on 2026-06-28; configured in
   shared CI for secret scanning.
 
@@ -106,5 +107,6 @@ Observed on 2026-06-28:
 - Verbose full-package ReadyCI runs for `loco-app` and `sim-engine` reached Rust
   work but were cancelled by ReadyCI log-delivery timeouts. Quiet or focused
   network-enabled reruns provided the dependency-fetching canary evidence.
-- Shared repository release evidence for `world-infra-v0.1.0-rc.7` is the local
-  shared gate set plus the product exact-revision canaries recorded here.
+- Shared repository release evidence for the product-consumed exact revision
+  `3cd8b9f9d37c4135c076da1167f73120d96b12d1` is the local shared gate set plus
+  the product exact-revision canaries recorded here.

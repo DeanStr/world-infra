@@ -7,11 +7,14 @@ Scope: phases 0, 1, 2, and 3 from
 
 Conclusion: phases 0-3 are implemented and locally canaried first as an
 extraction spike, then against the canonical remote release-candidate source
-`https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.7`.
-Shared local gates and product exact-revision canaries are green for the
-candidate. Airline dependency-fetching ReadyCI canaries also pass when submitted
-with `--network-mode default`; earlier DNS failures came from no-network
-submissions and are expected for Cargo git dependencies.
+`https://github.com/DeanStr/world-infra.git`. The initial remote candidate was
+tag `world-infra-v0.1.0-rc.7`; the product canary pins were refreshed to the
+post-rc7 exact revision `3cd8b9f9d37c4135c076da1167f73120d96b12d1` after
+follow-up hardening fixes. Shared local gates and product exact-revision
+canaries are green for the consumed revision. Airline dependency-fetching
+ReadyCI canaries also pass when submitted with `--network-mode default`; earlier
+DNS failures came from no-network submissions and are expected for Cargo git
+dependencies.
 
 ## Phase 0: Foundation
 
@@ -41,7 +44,9 @@ Evidence:
   entries after the shared repo has a commit.
 - Canonical remote exists at `https://github.com/DeanStr/world-infra.git`.
 - Release-candidate tag exists: `world-infra-v0.1.0-rc.7`.
-- Shared release evidence for `world-infra-v0.1.0-rc.7` is the local shared
+- Follow-up hardening revision consumed by Chairman and Airline:
+  `3cd8b9f9d37c4135c076da1167f73120d96b12d1`.
+- Shared release evidence for the consumed exact revision is the local shared
   gate set plus product exact-revision canaries recorded below.
 
 Local verification recorded:

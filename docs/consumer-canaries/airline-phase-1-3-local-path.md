@@ -19,7 +19,9 @@ Candidate revision or tag:
   `/home/dean/world-infra`;
 - release-candidate remote git proof:
   `https://github.com/DeanStr/world-infra.git` tag
-  `world-infra-v0.1.0-rc.7`.
+  `world-infra-v0.1.0-rc.7`;
+- follow-up exact-revision hardening proof:
+  `3cd8b9f9d37c4135c076da1167f73120d96b12d1`.
 
 Consumer: Airline.
 
@@ -141,7 +143,8 @@ Results:
 - `sim-engine db::rls`: 1 focused tenant-scope statement test passed.
 - Focused clippy gate passed with `-D warnings`.
 - Exact-revision rerun compiled shared crates from the remote
-  `world-infra-v0.1.0-rc.7` candidate.
+  `world-infra-v0.1.0-rc.7` candidate, then from the post-rc7 exact revision
+  `3cd8b9f9d37c4135c076da1167f73120d96b12d1`.
 - Dependency tree confirms direct consumption of the pinned git source for the
   canaried crates, including `world-telemetry`, `delivery-core`, and
   `tenant-scope-sqlx`.

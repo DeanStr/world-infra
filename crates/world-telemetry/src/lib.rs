@@ -143,6 +143,34 @@ impl fmt::Display for TelemetryError {
 
 impl Error for TelemetryError {}
 
+/// Error returned when telemetry shutdown fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetryShutdownError {
+    message: String,
+}
+
+impl TelemetryShutdownError {
+    /// Create a shutdown error from an underlying provider error message.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for TelemetryShutdownError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "failed to shut down OpenTelemetry tracer provider: {}",
+            self.message
+        )
+    }
+}
+
+impl Error for TelemetryShutdownError {}
+
 /// Guard that flushes telemetry on drop when an OpenTelemetry provider exists.
 #[derive(Debug)]
 pub struct TelemetryGuard {
@@ -168,13 +196,31 @@ impl TelemetryGuard {
             provider: Some(provider),
         }
     }
+
+    /// Flush and shut down the OpenTelemetry tracer provider, if one exists.
+    ///
+    /// Calling this explicitly lets services and tests observe shutdown errors.
+    /// Dropping the guard still performs best-effort shutdown as a fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryShutdownError`] when the OpenTelemetry provider
+    /// reports a shutdown failure.
+    pub fn shutdown(&mut self) -> Result<(), TelemetryShutdownError> {
+        #[cfg(feature = "opentelemetry")]
+        if let Some(provider) = self.provider.take() {
+            provider
+                .shutdown()
+                .map_err(|error| TelemetryShutdownError::new(error.to_string()))?;
+        }
+        Ok(())
+    }
 }
 
-#[cfg(feature = "opentelemetry")]
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
-        if let Some(provider) = self.provider.take() {
-            let _ = provider.shutdown();
+        if let Err(error) = self.shutdown() {
+            eprintln!("{error}");
         }
     }
 }
@@ -377,5 +423,23 @@ mod tests {
         let config = TelemetryConfig::new("svc", "info");
         assert_eq!(config.exporter_protocol, ExporterProtocol::HttpProtobuf);
         assert_eq!(config.failure_mode, FailureMode::Strict);
+    }
+
+    #[test]
+    fn shutdown_error_display_names_shutdown() {
+        assert_eq!(
+            TelemetryShutdownError::new("boom").to_string(),
+            "failed to shut down OpenTelemetry tracer provider: boom"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "subscriber")]
+    fn local_guard_shutdown_is_ok_and_idempotent() {
+        let mut guard = TelemetryGuard::local();
+        guard.shutdown().expect("local guard shutdown should be ok");
+        guard
+            .shutdown()
+            .expect("second local guard shutdown should be ok");
     }
 }
