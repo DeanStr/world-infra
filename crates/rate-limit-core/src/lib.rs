@@ -180,7 +180,8 @@ impl RateLimitHooks for () {}
 
 #[derive(Debug, Clone, Copy)]
 struct Bucket {
-    window_start: u64,
+    window_start: u128,
+    window_end: u128,
     count: u32,
 }
 
@@ -215,9 +216,10 @@ impl InProcessFixedWindow {
         if window.is_zero() {
             return Err(RateLimitError::ZeroWindow);
         }
-        let window_seconds = window.as_secs().max(1);
-        let now_seconds = unix_seconds(now);
-        let window_start = now_seconds - (now_seconds % window_seconds);
+        let window_millis = window_millis(window);
+        let now_millis = unix_millis(now);
+        let window_start = now_millis - (now_millis % window_millis);
+        let window_end = window_start.saturating_add(window_millis);
         let mut buckets = self
             .buckets
             .lock()
@@ -226,11 +228,13 @@ impl InProcessFixedWindow {
             .entry((namespace.0.clone(), key.0.clone()))
             .or_insert(Bucket {
                 window_start,
+                window_end,
                 count: 0,
             });
         if bucket.window_start != window_start {
             *bucket = Bucket {
                 window_start,
+                window_end,
                 count: 0,
             };
         }
@@ -241,8 +245,8 @@ impl InProcessFixedWindow {
             allowed,
             remaining,
             retry_after: (!allowed).then(|| {
-                let next_window = window_start.saturating_add(window_seconds);
-                Duration::from_secs(next_window.saturating_sub(now_seconds).max(1))
+                let next_window = window_start.saturating_add(window_millis);
+                duration_from_millis(next_window.saturating_sub(now_millis).max(1))
             }),
             health: RateLimitHealth::Healthy,
         })
@@ -250,13 +254,13 @@ impl InProcessFixedWindow {
 
     /// Remove buckets whose windows ended before `now`.
     pub fn cleanup(&self, now: SystemTime, older_than: Duration) -> Result<usize, RateLimitError> {
-        let cutoff = unix_seconds(now).saturating_sub(older_than.as_secs());
+        let cutoff = unix_millis(now).saturating_sub(older_than.as_millis());
         let mut buckets = self
             .buckets
             .lock()
             .map_err(|error| RateLimitError::Backend(error.to_string()))?;
         let before = buckets.len();
-        buckets.retain(|_, bucket| bucket.window_start >= cutoff);
+        buckets.retain(|_, bucket| bucket.window_end > cutoff);
         Ok(before - buckets.len())
     }
 
@@ -273,10 +277,18 @@ impl InProcessFixedWindow {
     }
 }
 
-fn unix_seconds(now: SystemTime) -> u64 {
+fn unix_millis(now: SystemTime) -> u128 {
     now.duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
-        .as_secs()
+        .as_millis()
+}
+
+fn window_millis(window: Duration) -> u128 {
+    window.as_millis().max(1)
+}
+
+fn duration_from_millis(millis: u128) -> Duration {
+    Duration::from_millis(u64::try_from(millis).unwrap_or(u64::MAX))
 }
 
 /// Redis fixed-window backend helper.
@@ -328,16 +340,16 @@ pub mod redis_backend {
             if window.is_zero() {
                 return Err(RateLimitError::ZeroWindow);
             }
-            let window_seconds = window.as_secs().max(1);
-            let now_seconds = unix_seconds(now);
-            let bucket = now_seconds - (now_seconds % window_seconds);
-            let redis_key = format!("{}:rl:{}:{}", self.namespace.as_str(), key.as_str(), bucket);
-            let ttl = i64::try_from(window_seconds.saturating_add(1)).unwrap_or(i64::MAX);
+            let window_millis = window_millis(window);
+            let now_millis = unix_millis(now);
+            let bucket = now_millis - (now_millis % window_millis);
+            let redis_key = redis_bucket_key(&self.namespace, key, bucket);
+            let ttl = i64::try_from(window_millis.saturating_add(1000)).unwrap_or(i64::MAX);
             let script = redis::Script::new(
                 r"
                 local current = redis.call('INCR', KEYS[1])
                 if current == 1 then
-                  redis.call('EXPIRE', KEYS[1], ARGV[1])
+                  redis.call('PEXPIRE', KEYS[1], ARGV[1])
                 end
                 return current
                 ",
@@ -354,11 +366,43 @@ pub mod redis_backend {
                 allowed,
                 remaining: count.get().saturating_sub(current),
                 retry_after: (!allowed).then(|| {
-                    let next_window = bucket.saturating_add(window_seconds);
-                    Duration::from_secs(next_window.saturating_sub(now_seconds).max(1))
+                    let next_window = bucket.saturating_add(window_millis);
+                    duration_from_millis(next_window.saturating_sub(now_millis).max(1))
                 }),
                 health: RateLimitHealth::Healthy,
             })
+        }
+    }
+
+    fn redis_bucket_key(namespace: &Namespace, key: &RateLimitKey, bucket: u128) -> String {
+        format!(
+            "rl:{}:{}:{}:{}:{}",
+            namespace.as_str().len(),
+            namespace.as_str(),
+            key.as_str().len(),
+            key.as_str(),
+            bucket
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn redis_bucket_keys_are_unambiguous_for_colon_parts() {
+            let first = redis_bucket_key(
+                &Namespace::new("a").unwrap(),
+                &RateLimitKey::new("b:rl:c").unwrap(),
+                42,
+            );
+            let second = redis_bucket_key(
+                &Namespace::new("a:rl:b").unwrap(),
+                &RateLimitKey::new("c").unwrap(),
+                42,
+            );
+
+            assert_ne!(first, second);
         }
     }
 }
@@ -392,6 +436,89 @@ mod tests {
         let second = backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap();
         assert!(!second.allowed);
         assert_eq!(second.retry_after, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn fixed_window_preserves_subsecond_duration() {
+        let backend = InProcessFixedWindow::new();
+        let ns = Namespace::new("app").unwrap();
+        let key = RateLimitKey::new("anonymous").unwrap();
+        let limit = LimitSpec::Fixed {
+            count: NonZeroU32::new(1).unwrap(),
+            window: Duration::from_millis(500),
+        };
+
+        assert!(backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap().allowed);
+        let second = backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap();
+        assert!(!second.allowed);
+        assert_eq!(second.retry_after, Some(Duration::from_millis(500)));
+
+        let after_window = UNIX_EPOCH + Duration::from_millis(500);
+        assert!(
+            backend
+                .check(&ns, &key, limit, after_window)
+                .unwrap()
+                .allowed
+        );
+    }
+
+    #[test]
+    fn nonzero_submillisecond_window_is_not_zeroed() {
+        let backend = InProcessFixedWindow::new();
+        let ns = Namespace::new("app").unwrap();
+        let key = RateLimitKey::new("anonymous").unwrap();
+        let limit = LimitSpec::Fixed {
+            count: NonZeroU32::new(1).unwrap(),
+            window: Duration::from_nanos(1),
+        };
+
+        assert!(backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap().allowed);
+        let second = backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap();
+        assert!(!second.allowed);
+        assert_eq!(second.retry_after, Some(Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn cleanup_preserves_active_long_windows() {
+        let backend = InProcessFixedWindow::new();
+        let ns = Namespace::new("app").unwrap();
+        let key = RateLimitKey::new("anonymous").unwrap();
+        let limit = LimitSpec::Fixed {
+            count: NonZeroU32::new(1).unwrap(),
+            window: Duration::from_secs(60),
+        };
+
+        assert!(backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap().allowed);
+        assert_eq!(
+            backend
+                .cleanup(UNIX_EPOCH + Duration::from_secs(1), Duration::ZERO)
+                .unwrap(),
+            0
+        );
+
+        let second = backend
+            .check(&ns, &key, limit, UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+        assert!(!second.allowed);
+    }
+
+    #[test]
+    fn cleanup_removes_expired_windows() {
+        let backend = InProcessFixedWindow::new();
+        let ns = Namespace::new("app").unwrap();
+        let key = RateLimitKey::new("anonymous").unwrap();
+        let limit = LimitSpec::Fixed {
+            count: NonZeroU32::new(1).unwrap(),
+            window: Duration::from_secs(1),
+        };
+
+        assert!(backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap().allowed);
+        assert_eq!(
+            backend
+                .cleanup(UNIX_EPOCH + Duration::from_secs(2), Duration::ZERO)
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

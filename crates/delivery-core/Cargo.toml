@@ -13,7 +13,7 @@ default = []
 world-identity = ["dep:world-identity-core"]
 
 [dependencies]
-world-identity-core = { path = "../world-identity-core", optional = true, default-features = false }
+world-identity-core = { path = "../world-identity-core", version = "0.1.0", optional = true, default-features = false }
 
 [lints]
 workspace = true

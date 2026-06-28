@@ -9,7 +9,7 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
-world-identity-core = { path = "../world-identity-core", default-features = false }
+world-identity-core = { path = "../world-identity-core", version = "0.1.0", default-features = false }
 
 [lints]
 workspace = true

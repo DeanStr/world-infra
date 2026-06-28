@@ -104,15 +104,16 @@ impl ScopeValue for u64 {
 
 /// Escape a setting value as a PostgreSQL string literal.
 ///
-/// This is used because `SET LOCAL name = $1` does not parameterize setting
-/// names. Names remain separately validated.
+/// Prefer [`set_local`] for execution; it uses parameterized `set_config`.
+/// This helper remains for reviewed statement display and product tests.
 ///
 /// # Errors
 ///
 /// Returns [`TenantScopeError::InvalidSettingValue`] for NUL bytes.
 pub fn quote_setting_value(value: impl ScopeValue) -> Result<String, TenantScopeError> {
     let value = value.to_scope_value()?;
-    Ok(format!("'{}'", value.replace('\'', "''")))
+    let escaped = value.replace('\\', "\\\\").replace('\'', "''");
+    Ok(format!("E'{escaped}'"))
 }
 
 /// Build a reviewed `SET LOCAL` statement.
@@ -142,8 +143,10 @@ pub async fn set_local<'c>(
     name: &SettingName,
     value: impl ScopeValue,
 ) -> Result<(), TenantScopeError> {
-    let statement = set_local_statement(name, value)?;
-    sqlx::query(&statement)
+    let value = value.to_scope_value()?;
+    sqlx::query("SELECT set_config($1, $2, true)")
+        .bind(name.as_str())
+        .bind(value)
         .execute(&mut **tx)
         .await
         .map_err(|error| TenantScopeError::Sql(error.to_string()))?;
@@ -167,7 +170,11 @@ mod tests {
         let name = SettingName::new("app.world_id").unwrap();
         assert_eq!(
             set_local_statement(&name, "world-'quoted'").unwrap(),
-            "SET LOCAL app.world_id = 'world-''quoted'''"
+            "SET LOCAL app.world_id = E'world-''quoted'''"
+        );
+        assert_eq!(
+            set_local_statement(&name, r"world\';select pg_sleep(10);--").unwrap(),
+            r"SET LOCAL app.world_id = E'world\\'';select pg_sleep(10);--'"
         );
         assert!(quote_setting_value("bad\0value").is_err());
     }

@@ -128,15 +128,20 @@ fn parse_host_port(value: &str) -> Result<(String, Option<u16>), HttpPrimitiveEr
                     .map_err(|_| HttpPrimitiveError::InvalidOrigin)?,
             )
         };
-        let host = host.trim_start_matches('[');
-        if host.is_empty() || host.parse::<Ipv6Addr>().is_err() {
+        let host = host
+            .strip_prefix('[')
+            .ok_or(HttpPrimitiveError::InvalidOrigin)?;
+        if host.is_empty() || host.starts_with('[') || host.parse::<Ipv6Addr>().is_err() {
             return Err(HttpPrimitiveError::InvalidOrigin);
         }
         return Ok((host.to_owned(), port));
     }
     if let Some((host, port)) = value.rsplit_once(':') {
         if host.contains(':') {
-            return Ok((value.to_owned(), None));
+            if value.parse::<Ipv6Addr>().is_ok() {
+                return Ok((value.to_owned(), None));
+            }
+            return Err(HttpPrimitiveError::InvalidOrigin);
         }
         if !valid_unbracketed_origin_host(host) {
             return Err(HttpPrimitiveError::InvalidOrigin);
@@ -153,7 +158,10 @@ fn parse_host_port(value: &str) -> Result<(String, Option<u16>), HttpPrimitiveEr
 }
 
 fn valid_unbracketed_origin_host(host: &str) -> bool {
-    !host.is_empty() && !host.contains(['[', ']'])
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '/' | '?' | '#' | '@' | '[' | ']'))
 }
 
 /// Parse comma-separated allowed origins.
@@ -257,12 +265,12 @@ pub fn extract_client_ip(
     if !trusted_proxies.iter().any(|proxy| proxy.contains(peer)) {
         return peer;
     }
-    match parse_forwarded_for(forwarded) {
+    match parse_forwarded_for(forwarded, trusted_proxies) {
         HeaderClientIp::Found(addr) => return addr,
         HeaderClientIp::Invalid => return peer,
         HeaderClientIp::Missing => {}
     }
-    match parse_x_forwarded_for(x_forwarded_for) {
+    match parse_x_forwarded_for(x_forwarded_for, trusted_proxies) {
         HeaderClientIp::Found(addr) => return addr,
         HeaderClientIp::Invalid => return peer,
         HeaderClientIp::Missing => {}
@@ -280,13 +288,35 @@ enum HeaderClientIp {
     Found(IpAddr),
 }
 
-fn parse_forwarded_for(value: Option<&str>) -> HeaderClientIp {
+fn parse_forwarded_for(value: Option<&str>, trusted_proxies: &[Cidr]) -> HeaderClientIp {
     let Some(value) = value else {
         return HeaderClientIp::Missing;
     };
-    let Some(entry) = value.split(',').next() else {
-        return HeaderClientIp::Missing;
-    };
+    let mut saw_entry = false;
+    for entry in value
+        .split(',')
+        .rev()
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        saw_entry = true;
+        let addr = match parse_forwarded_entry(entry) {
+            HeaderClientIp::Found(addr) => addr,
+            HeaderClientIp::Invalid => return HeaderClientIp::Invalid,
+            HeaderClientIp::Missing => return HeaderClientIp::Invalid,
+        };
+        if !is_trusted_proxy(addr, trusted_proxies) {
+            return HeaderClientIp::Found(addr);
+        }
+    }
+    if saw_entry {
+        HeaderClientIp::Invalid
+    } else {
+        HeaderClientIp::Missing
+    }
+}
+
+fn parse_forwarded_entry(entry: &str) -> HeaderClientIp {
     for part in entry.split(';') {
         let Some((name, raw)) = part.trim().split_once('=') else {
             continue;
@@ -299,14 +329,30 @@ fn parse_forwarded_for(value: Option<&str>) -> HeaderClientIp {
     HeaderClientIp::Invalid
 }
 
-fn parse_x_forwarded_for(value: Option<&str>) -> HeaderClientIp {
+fn parse_x_forwarded_for(value: Option<&str>, trusted_proxies: &[Cidr]) -> HeaderClientIp {
     let Some(value) = value else {
         return HeaderClientIp::Missing;
     };
-    let Some(first) = value.split(',').next() else {
-        return HeaderClientIp::Missing;
-    };
-    parse_ip_token(first).map_or(HeaderClientIp::Invalid, HeaderClientIp::Found)
+    let mut saw_entry = false;
+    for entry in value
+        .split(',')
+        .rev()
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        saw_entry = true;
+        let Some(addr) = parse_ip_token(entry) else {
+            return HeaderClientIp::Invalid;
+        };
+        if !is_trusted_proxy(addr, trusted_proxies) {
+            return HeaderClientIp::Found(addr);
+        }
+    }
+    if saw_entry {
+        HeaderClientIp::Invalid
+    } else {
+        HeaderClientIp::Missing
+    }
 }
 
 fn parse_single_ip_header(value: Option<&str>) -> HeaderClientIp {
@@ -320,11 +366,15 @@ fn parse_ip_token(value: &str) -> Option<IpAddr> {
     let value = value.trim().trim_matches('"');
     if value.starts_with('[') {
         let (host, tail) = value.split_once(']')?;
+        let host = host.strip_prefix('[')?;
+        if host.is_empty() || host.starts_with('[') {
+            return None;
+        }
         if !tail.is_empty() {
             let port = tail.strip_prefix(':')?;
             port.parse::<u16>().ok()?;
         }
-        return host.trim_start_matches('[').parse().ok();
+        return host.parse().ok();
     }
     value
         .parse::<IpAddr>()
@@ -332,21 +382,78 @@ fn parse_ip_token(value: &str) -> Option<IpAddr> {
         .or_else(|| value.parse::<SocketAddr>().ok().map(|socket| socket.ip()))
 }
 
+fn is_trusted_proxy(addr: IpAddr, trusted_proxies: &[Cidr]) -> bool {
+    trusted_proxies.iter().any(|proxy| proxy.contains(addr))
+}
+
 /// Return true when a bind address is publicly reachable.
 #[must_use]
 pub fn is_public_bind(addr: IpAddr) -> bool {
     match addr {
-        IpAddr::V4(addr) => {
-            addr == Ipv4Addr::UNSPECIFIED || !(addr.is_loopback() || addr.is_private())
-        }
-        IpAddr::V6(addr) => {
-            addr == Ipv6Addr::UNSPECIFIED || !(addr.is_loopback() || is_unique_local_v6(addr))
-        }
+        IpAddr::V4(addr) => addr == Ipv4Addr::UNSPECIFIED || is_public_unicast_v4(addr),
+        IpAddr::V6(addr) => addr == Ipv6Addr::UNSPECIFIED || is_public_unicast_v6(addr),
     }
+}
+
+fn is_public_unicast_v4(addr: Ipv4Addr) -> bool {
+    !(addr.octets()[0] == 0
+        || addr.is_loopback()
+        || addr.is_private()
+        || addr.is_link_local()
+        || addr.is_multicast()
+        || addr.is_broadcast()
+        || is_shared_v4(addr)
+        || is_benchmarking_v4(addr)
+        || is_documentation_v4(addr)
+        || is_reserved_v4(addr))
+}
+
+fn is_shared_v4(addr: Ipv4Addr) -> bool {
+    let [first, second, _, _] = addr.octets();
+    first == 100 && (64..=127).contains(&second)
+}
+
+fn is_benchmarking_v4(addr: Ipv4Addr) -> bool {
+    let [first, second, _, _] = addr.octets();
+    first == 198 && matches!(second, 18 | 19)
+}
+
+fn is_documentation_v4(addr: Ipv4Addr) -> bool {
+    let [first, second, third, _] = addr.octets();
+    matches!(
+        (first, second, third),
+        (192, 0, 2) | (198, 51, 100) | (203, 0, 113)
+    )
+}
+
+fn is_reserved_v4(addr: Ipv4Addr) -> bool {
+    addr.octets()[0] >= 240
+}
+
+fn is_public_unicast_v6(addr: Ipv6Addr) -> bool {
+    if let Some(addr) = addr.to_ipv4_mapped() {
+        return is_public_unicast_v4(addr);
+    }
+
+    !(addr.is_unspecified()
+        || addr.is_loopback()
+        || addr.is_multicast()
+        || is_unique_local_v6(addr)
+        || is_unicast_link_local_v6(addr)
+        || is_documentation_v6(addr))
 }
 
 fn is_unique_local_v6(addr: Ipv6Addr) -> bool {
     (addr.segments()[0] & 0xfe00) == 0xfc00
+}
+
+fn is_unicast_link_local_v6(addr: Ipv6Addr) -> bool {
+    (addr.segments()[0] & 0xffc0) == 0xfe80
+}
+
+fn is_documentation_v6(addr: Ipv6Addr) -> bool {
+    let segments = addr.segments();
+    segments[0] == 0x2001 && segments[1] == 0x0db8
 }
 
 #[cfg(test)]
@@ -401,12 +508,38 @@ mod tests {
     }
 
     #[test]
-    fn malformed_first_forwarded_ip_falls_back_to_peer() {
+    fn forwarded_walks_from_trusted_proxy_side() {
         let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
         let client = extract_client_ip(
             "10.1.1.1".parse().unwrap(),
             &proxies,
-            Some(r#"for="not-an-ip";proto=https, for="203.0.113.10""#),
+            Some(r#"for="1.2.3.4";proto=https, for="203.0.113.10""#),
+            Some("203.0.113.11"),
+            None,
+        );
+        assert_eq!(client, "203.0.113.10".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn forwarded_skips_trusted_proxy_hops() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            Some(r#"for="203.0.113.10";proto=https, for="10.2.2.2""#),
+            None,
+            None,
+        );
+        assert_eq!(client, "203.0.113.10".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn malformed_trusted_side_forwarded_ip_falls_back_to_peer() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            Some(r#"for="203.0.113.10";proto=https, for="not-an-ip""#),
             Some("203.0.113.11"),
             None,
         );
@@ -414,12 +547,12 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_first_element_without_for_falls_back_to_peer() {
+    fn forwarded_trusted_side_element_without_for_falls_back_to_peer() {
         let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
         let client = extract_client_ip(
             "10.1.1.1".parse().unwrap(),
             &proxies,
-            Some(r#"proto=https, for="203.0.113.10""#),
+            Some(r#"for="203.0.113.10", proto=https"#),
             Some("203.0.113.11"),
             None,
         );
@@ -440,13 +573,52 @@ mod tests {
     }
 
     #[test]
-    fn malformed_first_x_forwarded_for_falls_back_to_peer() {
+    fn nested_bracketed_x_forwarded_for_falls_back_to_peer() {
         let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
         let client = extract_client_ip(
             "10.1.1.1".parse().unwrap(),
             &proxies,
             None,
-            Some("not-an-ip, 203.0.113.10"),
+            Some("[[8.8.8.8]"),
+            Some("8.8.4.4"),
+        );
+        assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn x_forwarded_for_walks_from_trusted_proxy_side() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            None,
+            Some("1.2.3.4, 203.0.113.10"),
+            Some("203.0.113.11"),
+        );
+        assert_eq!(client, "203.0.113.10".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn x_forwarded_for_skips_trusted_proxy_hops() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            None,
+            Some("203.0.113.10, 10.2.2.2"),
+            None,
+        );
+        assert_eq!(client, "203.0.113.10".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn malformed_trusted_side_x_forwarded_for_falls_back_to_peer() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            None,
+            Some("203.0.113.10, not-an-ip"),
             Some("203.0.113.11"),
         );
         assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
@@ -479,10 +651,27 @@ mod tests {
     }
 
     #[test]
+    fn nested_bracketed_forwarded_ip_falls_back_to_peer() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            Some(r#"for="[[8.8.8.8]";proto=https"#),
+            None,
+            None,
+        );
+        assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
     fn parses_allowed_origins() {
-        let origins = parse_allowed_origins("https://example.com, http://localhost:5173").unwrap();
-        assert_eq!(origins.len(), 2);
+        let origins = parse_allowed_origins(
+            "https://example.com, http://localhost:5173, https://2001:db8::1",
+        )
+        .unwrap();
+        assert_eq!(origins.len(), 3);
         assert!(origins[1].is_local());
+        assert_eq!(origins[2].host, "2001:db8::1");
     }
 
     #[test]
@@ -491,12 +680,50 @@ mod tests {
         assert!(parse_allowed_origins("https://[2001:db8::1]:bad").is_err());
         assert!(parse_allowed_origins("https://[]:443").is_err());
         assert!(parse_allowed_origins("https://[not-an-ip]:443").is_err());
+        assert!(parse_allowed_origins("https://[[2001:db8::1]:443").is_err());
+        assert!(parse_allowed_origins("https://[[2001:db8::1]]:443").is_err());
         assert!(parse_allowed_origins("https://[2001:db8::1]:443").is_ok());
+    }
+
+    #[test]
+    fn rejects_ambiguous_multi_colon_origins() {
+        assert!(parse_allowed_origins("https://example.com:bad:tail").is_err());
+        assert!(parse_allowed_origins("https://2001:db8::1:443").is_ok());
     }
 
     #[test]
     fn rejects_empty_origin_hosts() {
         assert!(parse_allowed_origins("https://:443").is_err());
         assert!(parse_allowed_origins("https://").is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_origin_hosts() {
+        assert!(parse_allowed_origins("https://example.com?x").is_err());
+        assert!(parse_allowed_origins("https://example.com#frag").is_err());
+        assert!(parse_allowed_origins("https://user@example.com").is_err());
+        assert!(parse_allowed_origins("https://exa mple.com").is_err());
+        assert!(parse_allowed_origins("https://exa\tmple.com").is_err());
+    }
+
+    #[test]
+    fn public_bind_excludes_non_routable_addresses() {
+        assert!(is_public_bind("0.0.0.0".parse().unwrap()));
+        assert!(is_public_bind("::".parse().unwrap()));
+        assert!(is_public_bind("8.8.8.8".parse().unwrap()));
+        assert!(is_public_bind("2001:4860:4860::8888".parse().unwrap()));
+
+        assert!(!is_public_bind("127.0.0.1".parse().unwrap()));
+        assert!(!is_public_bind("0.1.2.3".parse().unwrap()));
+        assert!(!is_public_bind("10.0.0.1".parse().unwrap()));
+        assert!(!is_public_bind("169.254.1.10".parse().unwrap()));
+        assert!(!is_public_bind("224.0.0.1".parse().unwrap()));
+        assert!(!is_public_bind("192.0.2.1".parse().unwrap()));
+        assert!(!is_public_bind("fe80::1".parse().unwrap()));
+        assert!(!is_public_bind("ff02::1".parse().unwrap()));
+        assert!(!is_public_bind("2001:db8::1".parse().unwrap()));
+        assert!(!is_public_bind("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public_bind("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(is_public_bind("::ffff:8.8.8.8".parse().unwrap()));
     }
 }

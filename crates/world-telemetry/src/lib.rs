@@ -260,13 +260,13 @@ fn init_otel_subscriber(
         .with_batch_exporter(exporter)
         .build();
     let tracer = provider.tracer(config.service_name.clone());
-    global::set_tracer_provider(provider.clone());
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .try_init()
         .map_err(|error| TelemetryError::Subscriber(error.to_string()))?;
+    global::set_tracer_provider(provider.clone());
     Ok(TelemetryGuard::with_provider(provider))
 }
 
