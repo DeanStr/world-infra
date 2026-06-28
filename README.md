@@ -16,7 +16,8 @@ The first extraction wave covers:
 - product-neutral world clock primitives;
 - rate-limit backend mechanics;
 - narrow transaction-bound SQLx scope helpers;
-- durable delivery worker vocabulary.
+- durable delivery worker vocabulary;
+- product-neutral event envelope metadata.
 
 Product adapters remain in product repositories. Shared crates expose typed
 library errors and product-neutral examples; products map those errors to their
@@ -54,5 +55,7 @@ scripts/pinned-product-deps.sh
 ```
 
 See `docs/release-candidate-consumption.md` for the product canary flow.
-The current phase 0-3 implementation/readiness state is recorded in
-`docs/phase-0-3-readiness-audit.md`.
+The current implementation/readiness state is recorded in:
+
+- `docs/phase-0-3-readiness-audit.md`;
+- `docs/phase-4-readiness-audit.md`.

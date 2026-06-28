@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Approved and implemented for the first event-envelope crate.
 
 ## Summary
 
@@ -12,9 +12,9 @@ identity boundaries, while leaving event payloads, product event names, SQL
 tables, fanout transports, scheduler policy, and notification semantics in the
 product repositories.
 
-This RFC starts Phase 4 as an inventory and API boundary. It does not approve a
-crate shell yet. Implementation should wait until both products approve the
-envelope shape and name the first adapter canaries.
+This RFC started Phase 4 as an inventory and API boundary. It approved the
+first `world-event-core` crate after both product canaries were named. The
+implemented crate is limited to event-envelope metadata and validator types.
 
 ## Product Evidence
 
@@ -150,9 +150,12 @@ Consumer canaries required before release:
 
 - Chairman: adapt one existing outbox insert/read fixture to construct an
   envelope with `WorldRef<Uuid, NoIncarnation>` without changing the database or
-  WebSocket JSON.
+  WebSocket JSON. Implemented in Chairman
+  `chairman-game-db` as
+  `cycle_completed_outbox_metadata_fits_world_event_envelope`.
 - Airline: adapt one `cycleCompleted` fixture to construct an envelope with
   `WorldRef<i32, IncarnationId<Uuid>>`, preserving stale-world-instance checks,
-  durable dedupe IDs, and current WebSocket JSON.
+  durable dedupe IDs, and current WebSocket JSON. Implemented in Airline
+  `loco-app` as `cycle_completed_metadata_fits_world_event_envelope`.
 - Both products: run focused event/outbox/WebSocket tests and record the exact
   `world-infra` revision in release evidence before tagging.
