@@ -122,7 +122,8 @@ impl DeliveryVersion {
     ///
     /// # Errors
     ///
-    /// Returns [`NotificationError::InvalidDeliveryVersion`] for zero.
+    /// Returns [`NotificationError::InvalidDeliveryVersion`] for zero or a
+    /// negative value.
     pub const fn new(value: i32) -> Result<Self, NotificationError> {
         if value <= 0 {
             return Err(NotificationError::InvalidDeliveryVersion);
@@ -222,7 +223,7 @@ pub struct NotificationDeliveryContext<Id> {
     pub channel: NotificationChannel,
     /// Version of the product-owned notification item.
     pub delivery_version: DeliveryVersion,
-    /// Current attempt count.
+    /// Current 1-based provider attempt number for this claim.
     pub attempt: u32,
 }
 
