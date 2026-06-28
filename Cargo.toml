@@ -10,6 +10,7 @@ members = [
     "crates/rate-limit-core",
     "crates/tenant-scope-sqlx",
     "crates/delivery-core",
+    "crates/world-event-core",
 ]
 resolver = "2"
 

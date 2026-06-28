@@ -1,0 +1,16 @@
+[package]
+name = "world-event-core"
+description = "Product-neutral event envelope metadata for persistent multiplayer worlds."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+idempotency-core = { path = "../idempotency-core", version = "0.1.0", default-features = false }
+world-identity-core = { path = "../world-identity-core", version = "0.1.0", default-features = false }
+
+[lints]
+workspace = true
