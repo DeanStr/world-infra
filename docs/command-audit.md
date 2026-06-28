@@ -71,7 +71,8 @@ Observed on 2026-06-28:
   in shared CI for feature matrix coverage.
 - `cargo-semver-checks`: not installed locally when rechecked on 2026-06-28;
   configured in shared CI as a blocking baseline check against
-  `world-infra-v0.1.0-rc.7`.
+  `world-infra-v0.1.0-rc.7` for existing crates. New crates that do not exist
+  in the rc7 baseline are excluded until the next baseline includes them.
 - `gitleaks`: not installed locally when rechecked on 2026-06-28; configured in
   shared CI for secret scanning.
 
