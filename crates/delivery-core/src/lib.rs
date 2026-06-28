@@ -136,7 +136,11 @@ impl BackoffPolicy {
     pub fn delay_for_attempt(self, attempt: u32) -> Duration {
         let mut delay = self.initial;
         for _ in 0..attempt.saturating_sub(1) {
-            delay = delay.saturating_mul(self.multiplier).min(self.max);
+            let next = delay.saturating_mul(self.multiplier).min(self.max);
+            if next == delay {
+                break;
+            }
+            delay = next;
         }
         delay
     }
@@ -219,6 +223,17 @@ mod tests {
         assert_eq!(policy.delay_for_attempt(1), Duration::from_secs(2));
         assert_eq!(policy.delay_for_attempt(2), Duration::from_secs(6));
         assert_eq!(policy.delay_for_attempt(3), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn backoff_short_circuits_when_capped_or_constant() {
+        let capped =
+            BackoffPolicy::new(Duration::from_secs(2), Duration::from_secs(10), 3).unwrap();
+        assert_eq!(capped.delay_for_attempt(u32::MAX), Duration::from_secs(10));
+
+        let constant =
+            BackoffPolicy::new(Duration::from_secs(2), Duration::from_secs(10), 1).unwrap();
+        assert_eq!(constant.delay_for_attempt(u32::MAX), Duration::from_secs(2));
     }
 
     #[test]

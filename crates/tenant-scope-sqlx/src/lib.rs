@@ -44,12 +44,7 @@ impl SettingName {
             || value.len() > 128
             || value.starts_with('.')
             || value.ends_with('.')
-            || value.split('.').any(|part| {
-                part.is_empty()
-                    || part
-                        .chars()
-                        .any(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'))
-            })
+            || value.split('.').any(|part| !is_unquoted_identifier(part))
         {
             return Err(TenantScopeError::InvalidSettingName);
         }
@@ -61,6 +56,12 @@ impl SettingName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+fn is_unquoted_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
 }
 
 /// Serializable `SET LOCAL` value.
@@ -160,7 +161,10 @@ mod tests {
     #[test]
     fn rejects_malicious_setting_names() {
         assert!(SettingName::new("app.world_id").is_ok());
+        assert!(SettingName::new("app.world_id_2").is_ok());
         assert!(SettingName::new("App.world_id").is_err());
+        assert!(SettingName::new("app.123").is_err());
+        assert!(SettingName::new("1.app").is_err());
         assert!(SettingName::new("app.world_id;drop table worlds").is_err());
         assert!(SettingName::new(".app").is_err());
     }

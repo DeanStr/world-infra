@@ -1,0 +1,5 @@
+[patch.crates-io]
+# Local release packaging needs to resolve internal versioned dependencies before
+# any shared crates exist on crates.io. This patch is workspace-local and is not
+# included in packaged crate manifests.
+world-identity-core = { path = "crates/world-identity-core" }
