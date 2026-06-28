@@ -95,7 +95,7 @@ impl TelemetryConfig {
     }
 }
 
-/// Derive an OTLP traces endpoint using Chairman-compatible suffixing rules.
+/// Derive an OTLP traces endpoint using common `/v1/traces` suffixing rules.
 #[must_use]
 pub fn derive_traces_endpoint(
     traces_endpoint: Option<&str>,

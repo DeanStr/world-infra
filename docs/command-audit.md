@@ -64,8 +64,9 @@ Observed on 2026-06-28:
 
 - `cargo-audit`: available locally and run successfully against
   `/home/dean/world-infra/Cargo.lock`.
-- `cargo-deny`: not installed locally when rechecked on 2026-06-28; configured
-  in shared CI.
+- `cargo-deny`: installed later on 2026-06-28; `cargo deny check licenses`
+  passed locally after the license allowlist was updated. Full deny checks are
+  also configured in shared CI.
 - `cargo-hack`: not installed locally when rechecked on 2026-06-28; configured
   in shared CI for feature matrix coverage.
 - `cargo-semver-checks`: not installed locally when rechecked on 2026-06-28;
@@ -79,13 +80,31 @@ Observed on 2026-06-28:
 
 - `scripts/pinned-product-deps.sh` generated exact-revision dependency entries
   for the canonical `https://github.com/DeanStr/world-infra.git` remote after
-  the release-candidate tag `world-infra-v0.1.0-rc.5` was created.
+  the release-candidate tag `world-infra-v0.1.0-rc.6` was created.
 - Airline `make remote-check-touched` and `make remote-rust-check-pkg
   P=airline-utils` reached ReadyCI but failed at Cargo metadata because local
   `/world-infra` path dependencies are not available in the remote workspace.
   This confirmed remote canaries require exact-revision git dependencies from a
   canonical remote URL, not sibling local paths or local `file://` URLs.
 - After product manifests were repinned to the canonical GitHub exact revision,
-  `make remote-rust-check-pkg P=airline-utils` reached ReadyCI again but failed
-  before compilation because the ReadyCI runner could not resolve
-  `github.com` while Cargo fetched `world-infra`.
+  ReadyCI runs submitted with `network_mode=none` failed before compilation
+  because Cargo git dependencies intentionally cannot resolve `github.com`
+  without a network path. Observed no-network run ids include
+  `run_bdeb84769cf649f4`, `run_5959f87fcf0482e9`, and
+  `run_5f2449049e679631`; the last was retried with
+  `CARGO_NET_GIT_FETCH_WITH_CLI=true`, which cannot restore DNS in a no-network
+  guest.
+- `READYCI_RUN_FLAGS='--network-mode default' make remote-rust-check-pkg
+  P=airline-utils` passed against the canonical GitHub exact revision, including
+  19 tests.
+- Network-enabled ReadyCI run `run_66be0549bdce24d2` passed the quiet
+  `loco-app` `test-support` test lane with `network_mode=default` and
+  `runner_size=large`.
+- Network-enabled ReadyCI run `run_9625b0ff9f1a9794` passed `sim-engine` fmt,
+  quiet clippy, and the focused `db::rls` test with `network_mode=default` and
+  `runner_size=large`.
+- Verbose full-package ReadyCI runs for `loco-app` and `sim-engine` reached Rust
+  work but were cancelled by ReadyCI log-delivery timeouts. Quiet or focused
+  network-enabled reruns provided the dependency-fetching canary evidence.
+- Shared repository release evidence for `world-infra-v0.1.0-rc.6` is the local
+  shared gate set plus the product exact-revision canaries recorded here.

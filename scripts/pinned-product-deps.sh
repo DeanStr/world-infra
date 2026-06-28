@@ -82,11 +82,11 @@ delivery-core = { git = "$url", rev = "$rev" }
 http-primitives = { git = "$url", rev = "$rev" }
 idempotency-core = { git = "$url", rev = "$rev" }
 rate-limit-core = { git = "$url", rev = "$rev", features = ["redis"] }
-tenant-scope-sqlx = { git = "$url", rev = "$rev", default-features = false }
+tenant-scope-sqlx = { git = "$url", rev = "$rev", default-features = false, features = ["sqlx-postgres"] }
 world-clock-core = { git = "$url", rev = "$rev" }
 world-identity-core = { git = "$url", rev = "$rev" }
 world-telemetry = { git = "$url", rev = "$rev", features = ["otlp-grpc-tonic"] }
 
 # Airline apps/sim-engine dependencies
-tenant-scope-sqlx = { git = "$url", rev = "$rev", default-features = false }
+tenant-scope-sqlx = { git = "$url", rev = "$rev", default-features = false, features = ["sqlx-postgres"] }
 EOF

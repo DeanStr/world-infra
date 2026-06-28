@@ -7,14 +7,16 @@ Scope: phases 0, 1, 2, and 3 from
 
 Conclusion: phases 0-3 are implemented and locally canaried first as an
 extraction spike, then against the canonical remote release-candidate source
-`https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.5`.
-They are not final-release complete until remote product canaries pass or have
-approved dated deferrals.
+`https://github.com/DeanStr/world-infra.git` tag `world-infra-v0.1.0-rc.6`.
+Shared repository CI is green for the candidate. Airline dependency-fetching
+ReadyCI canaries also pass when submitted with `--network-mode default`; earlier
+DNS failures came from no-network submissions and are expected for Cargo git
+dependencies.
 
 ## Phase 0: Foundation
 
-Status: implemented for local extraction; release hardening is checked in but
-not fully exercised locally.
+Status: implemented for local extraction; release hardening is checked in and
+exercised in shared CI.
 
 Evidence:
 
@@ -38,7 +40,9 @@ Evidence:
 - `scripts/pinned-product-deps.sh` generates exact-revision product dependency
   entries after the shared repo has a commit.
 - Canonical remote exists at `https://github.com/DeanStr/world-infra.git`.
-- Release-candidate tag exists: `world-infra-v0.1.0-rc.5`.
+- Release-candidate tag exists: `world-infra-v0.1.0-rc.6`.
+- Shared release evidence for `world-infra-v0.1.0-rc.6` is the local shared
+  gate set plus product exact-revision canaries recorded below.
 
 Local verification recorded:
 
@@ -49,14 +53,30 @@ Local verification recorded:
 - `cargo test --workspace --all-features --examples`
 - `cargo doc --workspace --all-features --no-deps`
 - `cargo audit`
+- `cargo deny check licenses`
 
-Remaining before release-candidate or committed product consumption:
+Release-candidate evidence:
 
-- Run the remote product canaries against the canonical remote immutable source
-  and record ReadyCI run IDs.
-- Run CI or local equivalents for `cargo-deny`, `cargo-hack`,
-  `cargo-semver-checks`, and `gitleaks`. These tools are configured in CI but
-  were unavailable locally on 2026-06-28.
+- Airline remote product canaries against the canonical remote immutable source
+  fetch `world-infra` successfully when run with ReadyCI `network_mode=default`.
+  The `airline-utils` package canary passed through `make
+  remote-rust-check-pkg P=airline-utils` with
+  `READYCI_RUN_FLAGS='--network-mode default'`, including 19 tests.
+- Airline `loco-app` network-enabled ReadyCI test canary
+  `run_66be0549bdce24d2` passed on a large runner with
+  `network_mode=default`; the run executed the quiet `loco-app`
+  `test-support` test lane with `1032 passed; 0 failed` plus the remaining
+  package test binaries.
+- Airline `sim-engine` focused network-enabled ReadyCI canary
+  `run_9625b0ff9f1a9794` passed on a large runner with `network_mode=default`;
+  the run covered `cargo fmt --all -- --check`, quiet clippy for `sim-engine`,
+  and `cargo test -q -p sim-engine db::rls`.
+- Earlier ReadyCI runs submitted with no usable network path failed before
+  compilation because Cargo git dependencies intentionally cannot resolve
+  `github.com` under `network_mode=none`. Those runs are superseded by the
+  network-enabled canaries above.
+- `cargo-hack`, `cargo-semver-checks`, and `gitleaks` were exercised in shared
+  CI. `cargo-deny` was also run locally for the license check.
 - Repository package metadata points at
   `https://github.com/DeanStr/world-infra`.
 
@@ -207,24 +227,29 @@ Recorded local gates:
   `cargo test -p loco-app notification_delivery_backoff`,
   `cargo test -p loco-app notification_delivery`, and focused clippy passed.
 
-## Final Release Gap
+## Release Readiness
 
-The code and local canary evidence are sufficient for an extraction spike and a
-remote exact-revision release-candidate canary, but not for final release.
+The code, local canary evidence, shared CI, and network-enabled ReadyCI
+dependency-fetching canaries are sufficient for the phase 0-3
+release-candidate evidence set.
 
-Observed blocker:
+Observed non-code ReadyCI notes:
 
 - Airline ReadyCI runs previously reached remote execution but failed during
   Cargo metadata resolution because `/world-infra` was not present in the remote
   workspace. Product checkouts now use the canonical GitHub exact revision.
-- Follow-up Airline ReadyCI runs against the canonical GitHub pin failed before
-  compilation because the ReadyCI runner could not resolve `github.com` while
-  Cargo fetched `world-infra`.
+- Follow-up Airline ReadyCI runs that used `network_mode=none` failed before
+  compilation because the guest intentionally had no usable network path. Cargo
+  git dependencies are expected to fail in that mode.
+- Verbose full-package ReadyCI runs for `loco-app` and `sim-engine` reached
+  Rust work and were cancelled by ReadyCI log-delivery timeouts. Quiet or
+  focused network-enabled reruns passed for the dependency-fetching canary
+  surfaces recorded above.
 
 Required next release steps:
 
 1. Run the shared CI gates and the product canary commands recorded in
    `docs/consumer-canaries/`.
 2. Record exact revisions, remote run IDs, failures, and disposition.
-3. Tag final releases only after shared CI is green and both product canaries
-   pass, or after approved dated deferrals are recorded.
+3. Tag final releases only after normal release review and approval are
+   recorded.

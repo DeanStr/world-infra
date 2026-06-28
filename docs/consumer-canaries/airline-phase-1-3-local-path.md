@@ -19,7 +19,7 @@ Candidate revision or tag:
   `/home/dean/world-infra`;
 - release-candidate remote git proof:
   `https://github.com/DeanStr/world-infra.git` tag
-  `world-infra-v0.1.0-rc.5`.
+  `world-infra-v0.1.0-rc.6`.
 
 Consumer: Airline.
 
@@ -108,6 +108,9 @@ cargo tree -p sim-engine -i tenant-scope-sqlx
 cargo tree -p loco-app -i world-clock-core
 make remote-check-touched
 make remote-rust-check-pkg P=airline-utils
+READYCI_RUN_FLAGS='--network-mode default' make remote-rust-check-pkg P=airline-utils
+readyci run --api-url https://api.readyci.com --changes working --network-mode default --runner-size large --timeout 45m "RUST_LOG=off JWT_HS256_SECRET=testsecret cargo test -q -p loco-app --features test-support -- --test-threads=1"
+readyci run --api-url https://api.readyci.com --changes working --network-mode default --runner-size large --timeout 20m "cargo fmt --all -- --check && cargo clippy -q -p sim-engine --all-targets -- -D warnings && RUST_LOG=off cargo test -q -p sim-engine db::rls -- --test-threads=1"
 ```
 
 Results:
@@ -138,7 +141,7 @@ Results:
 - `sim-engine db::rls`: 1 focused tenant-scope statement test passed.
 - Focused clippy gate passed with `-D warnings`.
 - Exact-revision rerun compiled shared crates from the remote
-  `world-infra-v0.1.0-rc.5` candidate.
+  `world-infra-v0.1.0-rc.6` candidate.
 - Dependency tree confirms direct consumption of the pinned git source for the
   canaried crates, including `world-telemetry`, `delivery-core`, and
   `tenant-scope-sqlx`.
@@ -151,6 +154,29 @@ Results:
   `run_424f22839ed8085e`, and `run_e38eb33f6a76c196`.
 - `make remote-rust-check-pkg P=airline-utils` failed for the same dependency
   resolution reason in ReadyCI run `run_91015c09409f2548`.
+- After product manifests were repinned to the canonical GitHub exact revision,
+  ReadyCI runs submitted with no usable network path failed before compilation
+  while Cargo fetched `world-infra` from `github.com`. Those DNS failures are
+  expected under `network_mode=none` and are not treated as Rust or dependency
+  compatibility failures. Observed no-network runs include
+  `run_bdeb84769cf649f4`, `run_5959f87fcf0482e9`, and
+  `run_5f2449049e679631`; the last was retried with
+  `CARGO_NET_GIT_FETCH_WITH_CLI=true`, which cannot restore DNS when the guest
+  has no network path.
+- `READYCI_RUN_FLAGS='--network-mode default' make remote-rust-check-pkg
+  P=airline-utils` passed on 2026-06-28. The run fetched shared crates from the
+  canonical GitHub exact revision, compiled `world-env` and `world-test-lite`,
+  and passed all 19 `airline-utils` tests.
+- Network-enabled `loco-app` ReadyCI run `run_66be0549bdce24d2` passed on
+  2026-06-28 with `network_mode=default` and `runner_size=large`. It executed
+  `RUST_LOG=off JWT_HS256_SECRET=testsecret cargo test -q -p loco-app
+  --features test-support -- --test-threads=1`, including `1032 passed; 0
+  failed` for the main test binary and passing results for the remaining
+  package test binaries.
+- Network-enabled `sim-engine` ReadyCI run `run_9625b0ff9f1a9794` passed on
+  2026-06-28 with `network_mode=default` and `runner_size=large`. It executed
+  `cargo fmt --all -- --check`, quiet clippy for `sim-engine`, and
+  `cargo test -q -p sim-engine db::rls`, with the focused RLS test passing.
 
 Failures and disposition:
 
@@ -175,6 +201,13 @@ Failures and disposition:
   workspace as `/world-infra`. Product branches now use the canonical
   `https://github.com/DeanStr/world-infra.git` source for release-candidate
   verification.
+- Dependency-fetching ReadyCI checks must run with `--network-mode default`, or
+  with an equivalent warm/cold-cache path that does not require live Cargo git
+  fetches. If they run with `network_mode=none`, Cargo git dependencies fail by
+  design.
+- Verbose full-package ReadyCI runs for `loco-app` and `sim-engine` reached
+  Rust work but were cancelled by ReadyCI log-delivery timeouts. Quiet or
+  focused network-enabled reruns passed for the canary surfaces above.
 
 Release decision:
 
@@ -183,5 +216,5 @@ Release decision:
 - `delivery-core` evidence covers retry backoff mechanics, shared claim
   envelopes, shared finalization traits, and shared outcome vocabulary for
   Airline notification delivery.
-- Final release still requires Airline remote package/touched gates against the
-  canonical remote immutable source, or an approved dated deferral.
+- Network-enabled ReadyCI evidence supersedes the earlier no-network DNS
+  failures. Final release still requires normal release review and approval.

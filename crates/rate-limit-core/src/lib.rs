@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn unlimited_always_allows() {
         let backend = InProcessFixedWindow::new();
-        let ns = Namespace::new("chairman").unwrap();
+        let ns = Namespace::new("app").unwrap();
         let key = RateLimitKey::new("anonymous").unwrap();
         let decision = backend
             .check(&ns, &key, LimitSpec::Unlimited, UNIX_EPOCH)
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn fixed_window_rejects_and_sets_retry_after() {
         let backend = InProcessFixedWindow::new();
-        let ns = Namespace::new("chairman").unwrap();
+        let ns = Namespace::new("app").unwrap();
         let key = RateLimitKey::new("anonymous").unwrap();
         let limit = LimitSpec::Fixed {
             count: NonZeroU32::new(1).unwrap(),

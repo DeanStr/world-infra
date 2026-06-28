@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 /// Explicit marker for products that do not use incarnation keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct NoIncarnation;
 
 impl fmt::Display for NoIncarnation {
@@ -18,7 +17,6 @@ impl fmt::Display for NoIncarnation {
 
 /// Required incarnation identifier wrapper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct IncarnationId<I>(pub I);
 
 impl<I: fmt::Display> fmt::Display for IncarnationId<I> {
@@ -27,10 +25,13 @@ impl<I: fmt::Display> fmt::Display for IncarnationId<I> {
     }
 }
 
-/// Explicit world reference. `I` should be [`NoIncarnation`] or a required
-/// incarnation wrapper such as [`IncarnationId`].
+/// Explicit world reference for product-owned adapters.
+///
+/// This type intentionally has no serde implementation; products should expose
+/// explicit wire structs such as [`NoIncarnationWorldWire`] or
+/// [`IncarnatedWorldWire`] instead of accidentally committing this generic shape
+/// as an API contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct WorldRef<W, I> {
     /// Product-owned world identifier.
     pub world_id: W,
@@ -125,12 +126,12 @@ mod tests {
 
     #[test]
     fn no_incarnation_is_explicit() {
-        let world = WorldRef::new("chairman-world", NoIncarnation);
-        assert_eq!(world.no_incarnation_label(), "world:chairman-world");
+        let world = WorldRef::new("standalone-world", NoIncarnation);
+        assert_eq!(world.no_incarnation_label(), "world:standalone-world");
         assert_eq!(
             NoIncarnationWorldWire::from_world_ref(&world),
             NoIncarnationWorldWire {
-                world_id: "chairman-world".to_owned(),
+                world_id: "standalone-world".to_owned(),
                 incarnation: "none".to_owned()
             }
         );
@@ -147,5 +148,15 @@ mod tests {
                 world_instance_id: "instance-1".to_owned()
             }
         );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_feature_only_serializes_explicit_wire_fixtures() {
+        let world = WorldRef::new("world-1", IncarnationId("instance-1"));
+        let value = serde_json::to_value(IncarnatedWorldWire::from_world_ref(&world)).unwrap();
+        assert_eq!(value["world_id"], "world-1");
+        assert_eq!(value["world_instance_id"], "instance-1");
+        assert!(value.get("incarnation").is_none());
     }
 }

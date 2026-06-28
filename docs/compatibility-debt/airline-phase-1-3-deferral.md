@@ -4,6 +4,9 @@ Owner: Airline platform owner.
 
 Due date: 2026-08-15.
 
+Status: obsolete as of 2026-06-28. Network-enabled ReadyCI canaries supersede
+this proposed deferral.
+
 Affected crate/version:
 
 - Phase 1-3 canaried `world-infra` crates at `0.1.0`
@@ -18,14 +21,25 @@ adoption for `world-env`,
 `world-clock-core`, and `delivery-core`, recorded in
 `docs/consumer-canaries/airline-phase-1-3-local-path.md`.
 
-The remaining Airline phase 1-3 work is remote verification. ReadyCI remote
-wrappers originally reached the affected Rust rules but failed at Cargo metadata
-because the remote workspace could not resolve local `/world-infra` path
-dependencies. That class of blocker is addressed by publishing the shared
-repository at `https://github.com/DeanStr/world-infra.git` and repinning products
-to the `world-infra-v0.1.0-rc.5` canonical exact revision. Subsequent ReadyCI
-attempts reached the remote runner but failed before compilation because the
-runner could not resolve `github.com` while Cargo fetched `world-infra`.
+ReadyCI remote wrappers originally reached the affected Rust rules but failed at
+Cargo metadata because the remote workspace could not resolve local
+`/world-infra` path dependencies. That class of blocker is addressed by
+publishing the shared repository at
+`https://github.com/DeanStr/world-infra.git` and repinning products to the
+`world-infra-v0.1.0-rc.6` canonical exact revision.
+
+Subsequent exact-revision ReadyCI attempts submitted with no usable network path
+failed before compilation while Cargo fetched `world-infra` from `github.com`.
+Those DNS failures are expected under `network_mode=none` and do not indicate a
+Rust or shared-crate compatibility failure. Network-enabled reruns supersede
+this deferral:
+
+- `READYCI_RUN_FLAGS='--network-mode default' make remote-rust-check-pkg
+  P=airline-utils` passed, including 19 tests.
+- `run_66be0549bdce24d2` passed the quiet `loco-app` `test-support` test lane
+  with `network_mode=default` and `runner_size=large`.
+- `run_9625b0ff9f1a9794` passed `sim-engine` fmt, quiet clippy, and the focused
+  `db::rls` test with `network_mode=default` and `runner_size=large`.
 
 Airline telemetry is no longer deferred: the local canary upgraded `loco-app` to
 the shared OpenTelemetry `0.32` stack through `world-telemetry` while preserving
@@ -49,19 +63,20 @@ Compatibility being preserved:
   operator workflows. The current canary preserves these locally while sharing
   retry-backoff mechanics, claim envelopes, finalization traits, and outcome
   vocabulary.
-- Airline remote verification is intentionally not treated as passing until
-  ReadyCI succeeds against the canonical remote immutable source.
+- Cargo git dependency checks intentionally require `network_mode=default` or an
+  equivalent warm/cold-cache path. They are expected to fail under
+  `network_mode=none`.
 
 What makes this obsolete:
 
-- Airline remote package/touched gates pass or are replaced by an approved,
-  dated remote-verification deferral for the release candidate.
+- Network-enabled Airline remote package canaries pass against the canonical
+  remote immutable source.
 
 Scheduled review date: 2026-07-27.
 
-Approved by: pending Airline owner and Chairman world-infra DRI review.
+Approved by: not required; this deferral was superseded before approval.
 
-Required next verification:
+Historical next verification, now superseded by the network-enabled runs above:
 
 ```sh
 make remote-rust-check-pkg P=airline-utils

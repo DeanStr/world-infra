@@ -156,18 +156,18 @@ mod tests {
 
     #[test]
     fn rejects_malicious_setting_names() {
-        assert!(SettingName::new("chairman.world_id").is_ok());
-        assert!(SettingName::new("Chairman.world_id").is_err());
-        assert!(SettingName::new("chairman.world_id;drop table worlds").is_err());
-        assert!(SettingName::new(".chairman").is_err());
+        assert!(SettingName::new("app.world_id").is_ok());
+        assert!(SettingName::new("App.world_id").is_err());
+        assert!(SettingName::new("app.world_id;drop table worlds").is_err());
+        assert!(SettingName::new(".app").is_err());
     }
 
     #[test]
     fn escapes_setting_values() {
-        let name = SettingName::new("chairman.world_id").unwrap();
+        let name = SettingName::new("app.world_id").unwrap();
         assert_eq!(
             set_local_statement(&name, "world-'quoted'").unwrap(),
-            "SET LOCAL chairman.world_id = 'world-''quoted'''"
+            "SET LOCAL app.world_id = 'world-''quoted'''"
         );
         assert!(quote_setting_value("bad\0value").is_err());
     }
