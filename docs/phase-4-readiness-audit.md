@@ -144,6 +144,6 @@ Phase 4 release-candidate evidence:
 1. shared release source: `6c3887d69080fe2e502053db8b94db5d99927f85`;
 2. release tag: `world-infra-v0.1.0-rc.10`;
 3. Chairman canary commit: `88b77e07fe72330c6fc8db838d66885561fb9210`;
-4. Airline canary commit: `c3ce8fcf4ede3f42780bc462360022b9447a0a0a`;
+4. Airline canary commit: `740060455917346da36aecaee45ce47c2c0ec03f`;
 5. release review confirms `event-fanout` remains deferred and
    `notification-core` remains delivery-metadata-only.

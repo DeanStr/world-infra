@@ -43,10 +43,10 @@ implemented crate is limited to event-envelope metadata and validator types.
     durable `cycleCompleted` emission after the finalization boundary commits.
   - An adapter would use `WorldRef<i32, IncarnationId<Uuid>>`.
 - Approved deferral, if any:
-  - `notification-core` remains deferred. `delivery-core` is the only approved
-    shared delivery surface for now. Notification categories, preference
-    policy, delivery versions, quiet hours, managed actions, user copy, and UI
-    semantics remain product-owned.
+  - `notification-core` is limited to delivery metadata and provider attempt
+    outcomes. `delivery-core` remains the shared delivery worker surface for
+    this phase. Notification categories, preference policy, quiet hours,
+    managed actions, user copy, and UI semantics remain product-owned.
   - `event-fanout` remains deferred until event envelopes are stable and both
     products agree which Redis/Valkey or local broadcast failure semantics are
     truly common.
@@ -133,8 +133,9 @@ generic types do not accidentally become public API contracts.
 - Existing event IDs are product-owned. The shared crate may validate strings,
   but it must not parse Chairman or Airline event ID formats as universal
   structure.
-- If a future release adds `event-fanout` or `notification-core`, it needs a
-  separate RFC with both-product evidence and rollback notes.
+- If a future release adds `event-fanout` or expands `notification-core` beyond
+  delivery metadata, it needs a separate RFC with both-product evidence and
+  rollback notes.
 
 ## Verification
 
