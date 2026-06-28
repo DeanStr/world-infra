@@ -16,10 +16,12 @@ Reason:
 Chairman has completed local-path and remote exact-revision canary adoption for
 phase 1-3 surfaces. Airline now has local-path and remote exact-revision canary
 adoption for `world-env`,
-`world-test-lite`, `world-telemetry`, `world-identity-core`,
-`idempotency-core`, `http-primitives`, `rate-limit-core`, `tenant-scope-sqlx`,
-`world-clock-core`, and `delivery-core`, recorded in
+`world-test-lite`, `world-telemetry`, `http-primitives`, `rate-limit-core`,
+`tenant-scope-sqlx`, `world-clock-core`, and `delivery-core`, recorded in
 `docs/consumer-canaries/airline-phase-1-3-local-path.md`.
+The rc8 validation also covered `world-identity-core` and `idempotency-core`
+through a canary-only Airline adapter that was removed after validation because
+it had no production callers.
 
 ReadyCI remote wrappers originally reached the affected Rust rules but failed at
 Cargo metadata because the remote workspace could not resolve local

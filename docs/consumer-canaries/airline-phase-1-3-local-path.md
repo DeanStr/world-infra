@@ -5,8 +5,6 @@ Crates:
 - `world-env`
 - `world-test-lite`
 - `world-telemetry`
-- `world-identity-core`
-- `idempotency-core`
 - `delivery-core`
 - `http-primitives`
 - `rate-limit-core`
@@ -41,12 +39,12 @@ Scope:
 - Airline lockfile was upgraded from
   `opentelemetry`/`opentelemetry-otlp` `0.31` to the shared `0.32` stack as part
   of telemetry adoption.
-- `apps/loco-app` exposes a narrow `world_infra` adapter over
-  `WorldRef<i32, IncarnationId<Uuid>>`, proving Airline durable-world identity
-  cannot omit `world_instance_id`.
-- `apps/loco-app` uses `idempotency-core` only for new world-instance-scoped key
-  construction. Existing Redis, event, cycle, and delivery key formats are not
-  parsed, normalized, or migrated.
+- `world-identity-core` and `idempotency-core` were validated during the rc8
+  canary with a narrow `world_infra` adapter proving Airline durable-world
+  identity could require `world_instance_id` and construct new
+  world-instance-scoped keys without migrating existing persisted key formats.
+  After rc8 validation, Airline removed that adapter because it had no
+  production callers.
 - `apps/loco-app` notification delivery retry delay calculation uses
   `delivery-core::BackoffPolicy` while preserving Airline's existing 15s, 30s,
   60s, 120s, 240s, then 10m cap sequence and product-owned delivery row status
@@ -86,7 +84,6 @@ cargo fmt --check
 cargo test -p airline-utils
 cargo test -p loco-app observability
 cargo test -p loco-app telemetry_config
-cargo test -p loco-app world_infra
 cargo test -p loco-app utils::net
 cargo test -p loco-app db::rls
 cargo test -p loco-app rate_limit
@@ -100,8 +97,6 @@ cargo clippy -p airline-utils -p loco-app -p sim-engine --all-targets -- -D warn
 cargo tree -p airline-utils -i world-env
 cargo tree -p loco-app -i world-telemetry
 cargo tree -p loco-app -i opentelemetry
-cargo tree -p loco-app -i world-identity-core
-cargo tree -p loco-app -i idempotency-core
 cargo tree -p loco-app -i delivery-core
 cargo tree -p loco-app -i http-primitives
 cargo tree -p loco-app -i rate-limit-core
@@ -124,8 +119,9 @@ Results:
 - `loco-app telemetry_config`: 2 focused tests passed, proving best-effort
   local tracing without an endpoint and gRPC/tonic OTLP when
   `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
-- `loco-app world_infra`: 3 tests passed; 1029 unrelated tests filtered on the
-  exact-revision rerun.
+- Historical `loco-app world_infra` rc8 canary: 3 tests passed; 1029 unrelated
+  tests filtered on the exact-revision rerun. The canary-only adapter was later
+  deleted from Airline because it had no production callers.
 - `loco-app utils::net`: 4 tests passed; request IP/proxy behavior covered.
 - `loco-app db::rls`: 1 focused tenant-scope statement test passed.
 - `loco-app rate_limit`: 45 library tests and the filtered rate-limit integration
@@ -146,7 +142,7 @@ Results:
   `world-infra-v0.1.0-rc.7` candidate, then from the
   `world-infra-v0.1.0-rc.8` candidate.
 - Dependency tree confirms direct consumption of the pinned git source for the
-  canaried crates, including `world-telemetry`, `delivery-core`, and
+  currently consumed crates, including `world-telemetry`, `delivery-core`, and
   `tenant-scope-sqlx`.
 - Dependency tree confirms `loco-app` now consumes OpenTelemetry through
   `world-telemetry` on `opentelemetry` `0.32`.

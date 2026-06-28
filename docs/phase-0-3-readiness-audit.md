@@ -155,11 +155,11 @@ Product canary evidence:
 - Chairman tests characterize `WorldRef<Uuid, NoIncarnation>` and new-key
   construction with `idempotency-core`; API request id/client IP parsing uses
   `http-primitives`.
-- Airline exposes a narrow `world_infra` adapter over
-  `WorldRef<i32, IncarnationId<Uuid>>`, proving durable-world identity cannot
-  omit `world_instance_id`.
-- Airline uses `idempotency-core` only for new world-instance-scoped key
-  construction.
+- Airline validated `world-identity-core` and `idempotency-core` during the rc8
+  canary with a narrow `world_infra` adapter proving durable-world identity
+  could require `world_instance_id` and construct new world-instance-scoped
+  keys. After validation, Airline removed that adapter because it had no
+  production callers.
 - Airline request IP extraction delegates trusted proxy CIDR parsing and
   forwarded-header precedence to `http-primitives`.
 - Airline uses `world-clock-core::Cadence` inside its existing next-cycle start
@@ -168,8 +168,9 @@ Product canary evidence:
 Recorded local gates:
 
 - Chairman: `cargo test -p chairman-api` passed.
-- Airline: `cargo test -p loco-app world_infra`, `cargo test -p loco-app
-  utils::net`, and `cargo test -p loco-app next_cycle_start_time` passed.
+- Airline: historical `cargo test -p loco-app world_infra` rc8 canary passed;
+  current `cargo test -p loco-app utils::net` and
+  `cargo test -p loco-app next_cycle_start_time` passed.
 
 ## Phase 3: Runtime Mechanics And Tenant Scope
 

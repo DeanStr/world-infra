@@ -60,10 +60,10 @@ operations.
 
 Local-path canary status:
 
-- `apps/loco-app/src/world_infra.rs` adapts Airline identity as
-  `WorldRef<i32, IncarnationId<Uuid>>`.
-- `apps/loco-app/src/world_infra.rs` uses `idempotency-core` only for new
-  world-instance-scoped keys.
+- The rc8 canary used `apps/loco-app/src/world_infra.rs` to adapt Airline
+  identity as `WorldRef<i32, IncarnationId<Uuid>>` and to use
+  `idempotency-core` only for new world-instance-scoped keys. After validation,
+  Airline deleted that canary-only adapter because no production code called it.
 - `apps/loco-app/src/utils/net.rs` uses `http-primitives` for trusted proxy CIDR
   parsing and forwarded-header client IP extraction, while retaining Airline's
   `TRUST_PROXY_HEADERS`, `TRUSTED_PROXY_CIDRS`, and
