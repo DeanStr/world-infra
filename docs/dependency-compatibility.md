@@ -21,7 +21,7 @@ Current source-product inventory was captured from `/home/dean/chairman` and
 - Shared crates use Rust edition 2021 with MSRV 1.88 because current `redis`
   and `tonic` integration dependencies require Rust 1.88.
 - The original OpenTelemetry skew was resolved in the Airline local-path canary
-  and rerun against the `world-infra-v0.1.0-rc.5` remote candidate:
+  and rerun against the `world-infra-v0.1.0-rc.6` remote candidate:
   `loco-app` now consumes `world-telemetry` with `otlp-grpc-tonic`, upgrading
   `opentelemetry`/`opentelemetry-otlp` from `0.31` to `0.32` while preserving
   Airline's gRPC/tonic exporter behavior.
