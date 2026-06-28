@@ -10,7 +10,7 @@ delivery-facing slice of `notification-core`. `event-fanout` remains deferred.
 The shared crates contain only product-neutral event envelope metadata,
 notification delivery metadata, and validators. Chairman and Airline
 notification canaries target exact `world-infra` revision
-`e6a50d3eab4232c117b119fce1bc09e7946f9970`.
+`6c3887d69080fe2e502053db8b94db5d99927f85`.
 
 ## world-event-core
 
@@ -76,7 +76,7 @@ Shared implementation evidence:
 - `NotificationProviderOutcome` maps to `delivery-core::DeliveryAttemptOutcome`
   so provider adapters can share retry/finalization vocabulary.
 
-Product canary target:
+Product canary evidence:
 
 - Airline maps notification delivery rows, channels, delivery versions, and
   retry outcomes through the shared types while preserving its notification
@@ -84,6 +84,29 @@ Product canary target:
 - Chairman maps external alert delivery claims and provider outcomes through the
   shared types while preserving its alert categories, urgency, payloads, and
   recipient policy.
+
+Recorded local gates:
+
+```sh
+# world-infra
+cargo fmt --check
+cargo test -p notification-core
+cargo clippy -p notification-core --all-targets -- -D warnings
+cargo test --workspace --all-features
+cargo test --workspace --no-default-features
+
+# Chairman
+cargo fmt --check
+cargo test -p chairman-game-db external_alert_claim_maps_to_shared_notification_delivery_context
+cargo test -p chairman-game-db cycle_completed_outbox_metadata_fits_world_event_envelope
+cargo clippy -p chairman-game-db --all-targets -- -D warnings
+
+# Airline
+cargo fmt --check
+cargo test -p loco-app work_item
+cargo test -p loco-app cycle_completed_metadata_fits_world_event_envelope
+cargo clippy -p loco-app --lib -- -D warnings
+```
 
 Still out of scope:
 
@@ -116,13 +139,11 @@ Required future gate:
 
 ## Release Readiness
 
-Phase 4 is ready for a release-candidate tag after:
+Phase 4 release-candidate evidence:
 
-1. shared CI passes for revision `e6a50d3eab4232c117b119fce1bc09e7946f9970`;
-2. Chairman and Airline exact-revision product commits pass CI;
-3. release review confirms `event-fanout` remains deferred and
+1. shared release source: `6c3887d69080fe2e502053db8b94db5d99927f85`;
+2. release tag: `world-infra-v0.1.0-rc.10`;
+3. Chairman canary commit: `88b77e07fe72330c6fc8db838d66885561fb9210`;
+4. Airline canary commit: `c3ce8fcf4ede3f42780bc462360022b9447a0a0a`;
+5. release review confirms `event-fanout` remains deferred and
    `notification-core` remains delivery-metadata-only.
-
-Notification-core release source:
-
-- `e6a50d3eab4232c117b119fce1bc09e7946f9970`
