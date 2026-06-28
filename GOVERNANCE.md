@@ -41,6 +41,7 @@ spike; release candidates still require both-product approval.
 | `tenant-scope-sqlx` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline likely first | Chairman DB owner |
 | `delivery-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman external alerts | Airline notification owner |
 | `world-event-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman outbox canary | Airline cycle-event canary |
+| `notification-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline notification delivery | Chairman external alerts |
 
 ## Boundaries
 

@@ -11,6 +11,7 @@ members = [
     "crates/tenant-scope-sqlx",
     "crates/delivery-core",
     "crates/world-event-core",
+    "crates/notification-core",
 ]
 resolver = "2"
 

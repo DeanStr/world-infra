@@ -17,7 +17,9 @@ The first extraction wave covers:
 - rate-limit backend mechanics;
 - narrow transaction-bound SQLx scope helpers;
 - durable delivery worker vocabulary;
-- product-neutral event envelope metadata.
+- product-neutral event envelope metadata;
+- notification delivery channel, target, version, and provider outcome
+  vocabulary.
 
 Product adapters remain in product repositories. Shared crates expose typed
 library errors and product-neutral examples; products map those errors to their

@@ -5,11 +5,12 @@ Date: 2026-06-28.
 Scope: phase 4 from
 `/home/dean/chairman/docs/world-infra-unified-extraction-plan.md`.
 
-Conclusion: Phase 4 is implemented for `world-event-core` and explicitly
-deferred for `notification-core` and `event-fanout`. The shared crate contains
-only product-neutral event envelope metadata and validators. Chairman and
-Airline both have focused consumer canaries against exact `world-infra`
-revision `41049ae237fd5367a23494d2cdb3f9ef93895bfe`.
+Conclusion: Phase 4 is implemented for `world-event-core` and the narrow
+delivery-facing slice of `notification-core`. `event-fanout` remains deferred.
+The shared crates contain only product-neutral event envelope metadata,
+notification delivery metadata, and validators. Chairman and Airline
+notification canaries target exact `world-infra` revision
+`e6a50d3eab4232c117b119fce1bc09e7946f9970`.
 
 ## world-event-core
 
@@ -59,26 +60,38 @@ cargo test -p loco-app cycle_completed_metadata_fits_world_event_envelope
 
 ## notification-core
 
-Status: deferred.
+Status: implemented for delivery metadata only.
 
-Decision: do not create `notification-core` in Phase 4.
+Decision: create `notification-core`, but keep product notification policy out
+of the shared crate.
 
-Reason:
+Shared implementation evidence:
 
-- `delivery-core` now captures the common retry, lease, attempt-outcome, and run
-  report vocabulary.
-- Chairman and Airline still differ materially in notification categories,
-  preference filtering, quiet hours, delivery versions, managed actions,
-  provider workflows, inbox/toast semantics, deep links, and user-facing copy.
-- Extracting those pieces now would either overfit Airline's mature notification
-  center or prematurely constrain Chairman's external alert model.
+- `NotificationChannel` covers external delivery channels shared by both
+  products: email, browser push, FCM, APNS, and webhook.
+- `DeliveryVersion` validates positive product notification versions without
+  defining product SQL tables or lifecycle rules.
+- `NotificationTarget` validates generic external target strings while leaving
+  channel-specific syntax and provider policy in products.
+- `NotificationProviderOutcome` maps to `delivery-core::DeliveryAttemptOutcome`
+  so provider adapters can share retry/finalization vocabulary.
 
-Required future gate:
+Product canary target:
 
-- separate RFC;
-- both-product adapter examples or a dated approved deferral;
-- rollback notes for delivery semantics;
-- product canaries proving no notification wire, queue, SQL, or user-copy drift.
+- Airline maps notification delivery rows, channels, delivery versions, and
+  retry outcomes through the shared types while preserving its notification
+  center schema and delivery-version reopen semantics.
+- Chairman maps external alert delivery claims and provider outcomes through the
+  shared types while preserving its alert categories, urgency, payloads, and
+  recipient policy.
+
+Still out of scope:
+
+- notification categories;
+- preferences and quiet hours;
+- inbox/toast/read-state behavior;
+- templates, copy, deep links, and managed actions;
+- provider clients and product SQL schemas.
 
 ## event-fanout
 
@@ -105,7 +118,11 @@ Required future gate:
 
 Phase 4 is ready for a release-candidate tag after:
 
-1. shared CI passes for revision `41049ae237fd5367a23494d2cdb3f9ef93895bfe`;
+1. shared CI passes for revision `e6a50d3eab4232c117b119fce1bc09e7946f9970`;
 2. Chairman and Airline exact-revision product commits pass CI;
-3. release review confirms `notification-core` and `event-fanout` remain
-   deferred.
+3. release review confirms `event-fanout` remains deferred and
+   `notification-core` remains delivery-metadata-only.
+
+Notification-core release source:
+
+- `e6a50d3eab4232c117b119fce1bc09e7946f9970`
