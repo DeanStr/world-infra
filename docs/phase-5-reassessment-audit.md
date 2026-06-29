@@ -265,3 +265,7 @@ GitHub Actions evidence:
 1. Future phase: revisit `world-cycle-sqlx` and `world-followup-sqlx` only
    after both products intentionally converge on SQL adapter traits or table
    shapes.
+2. Phase 6 candidate selection now lives in
+   `docs/phase-6-candidate-audit.md`. The recommended first slice is narrow
+   notification provider outcome adapters; broad SQL extraction remains
+   deferred.

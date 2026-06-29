@@ -10,6 +10,7 @@ use std::{error::Error, fmt, num::NonZeroU32, str::FromStr, time::Duration};
 use delivery_core::DeliveryAttemptOutcome;
 
 const MAX_TARGET_LEN: usize = 1024;
+const MAX_PROVIDER_FAILURE_CODE_LEN: usize = 128;
 
 /// Error returned for malformed notification delivery metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +273,187 @@ pub struct NotificationDeliveryContext<Id> {
     pub attempt: NotificationAttempt,
 }
 
+/// Sanitized, product-provided provider failure code.
+///
+/// This is intended for stable labels such as `smtp_response`,
+/// `web_push_subscription_gone`, or `http_503`. It intentionally accepts only
+/// lowercase ASCII letters, digits, and underscores so raw URLs, recipient
+/// addresses, endpoints, bearer material, provider bodies, and diagnostics are
+/// not accidentally normalized into shared metadata. Products should log
+/// redacted provider details locally instead of storing them here.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderFailureCode(String);
+
+impl ProviderFailureCode {
+    /// Validate and construct a sanitized provider failure code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if the code is blank, too long, or
+    /// contains unsupported characters.
+    pub fn new(value: impl AsRef<str>) -> Result<Self, NotificationError> {
+        let value = value.as_ref().trim();
+        if value.is_empty() {
+            return Err(NotificationError::Empty {
+                field: "provider_failure_code",
+            });
+        }
+        if value.len() > MAX_PROVIDER_FAILURE_CODE_LEN {
+            return Err(NotificationError::TooLong {
+                field: "provider_failure_code",
+                len: value.len(),
+                max: MAX_PROVIDER_FAILURE_CODE_LEN,
+            });
+        }
+        if let Some(ch) = value
+            .chars()
+            .find(|ch| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_'))
+        {
+            return Err(NotificationError::InvalidCharacter {
+                field: "provider_failure_code",
+                ch,
+            });
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    /// Access the sanitized code.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ProviderFailureCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for ProviderFailureCode {
+    type Err = NotificationError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
+    }
+}
+
+/// Failure-only provider classification.
+///
+/// This type deliberately has no `Accepted` variant. Successful attempts should
+/// use [`NotificationProviderOutcome::Accepted`]. Products remain responsible
+/// for deciding what a provider-specific failure means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum ProviderFailureClass {
+    /// The provider failure can be retried.
+    Retryable,
+    /// The provider rejected the target or message permanently.
+    Permanent,
+    /// The provider side effect may have happened, but completion is unknown.
+    AmbiguousAfterSideEffect,
+}
+
+/// Sanitized metadata for a failed provider attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFailure {
+    class: ProviderFailureClass,
+    retry_after: Option<Duration>,
+    code: Option<ProviderFailureCode>,
+}
+
+impl ProviderFailure {
+    /// Construct a retryable provider failure without a provider retry hint.
+    #[must_use]
+    pub const fn retryable() -> Self {
+        Self {
+            class: ProviderFailureClass::Retryable,
+            retry_after: None,
+            code: None,
+        }
+    }
+
+    /// Construct a retryable provider failure with a provider retry hint.
+    #[must_use]
+    pub const fn retryable_after(retry_after: Duration) -> Self {
+        Self {
+            class: ProviderFailureClass::Retryable,
+            retry_after: Some(retry_after),
+            code: None,
+        }
+    }
+
+    /// Construct a provider-permanent failure.
+    #[must_use]
+    pub const fn permanent() -> Self {
+        Self {
+            class: ProviderFailureClass::Permanent,
+            retry_after: None,
+            code: None,
+        }
+    }
+
+    /// Construct an ambiguous-after-side-effect provider failure.
+    #[must_use]
+    pub const fn ambiguous_after_side_effect() -> Self {
+        Self {
+            class: ProviderFailureClass::AmbiguousAfterSideEffect,
+            retry_after: None,
+            code: None,
+        }
+    }
+
+    /// Add a sanitized provider failure code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if the code is not a stable sanitized
+    /// label. Do not pass raw provider bodies, endpoints, recipient addresses,
+    /// tokens, or diagnostics.
+    pub fn with_code(mut self, code: impl AsRef<str>) -> Result<Self, NotificationError> {
+        self.code = Some(ProviderFailureCode::new(code)?);
+        Ok(self)
+    }
+
+    /// Return the failure class.
+    #[must_use]
+    pub const fn class(&self) -> ProviderFailureClass {
+        self.class
+    }
+
+    /// Return the optional provider retry hint.
+    #[must_use]
+    pub const fn retry_after(&self) -> Option<Duration> {
+        self.retry_after
+    }
+
+    /// Return the optional sanitized provider failure code.
+    #[must_use]
+    pub fn code(&self) -> Option<&ProviderFailureCode> {
+        self.code.as_ref()
+    }
+
+    /// Convert to provider outcome vocabulary.
+    #[must_use]
+    pub const fn as_provider_outcome(&self) -> NotificationProviderOutcome {
+        match self.class {
+            ProviderFailureClass::Retryable => NotificationProviderOutcome::RetryableFailure {
+                retry_after: self.retry_after,
+            },
+            ProviderFailureClass::Permanent => NotificationProviderOutcome::PermanentFailure,
+            ProviderFailureClass::AmbiguousAfterSideEffect => {
+                NotificationProviderOutcome::AmbiguousAfterSideEffect
+            }
+        }
+    }
+}
+
+impl From<ProviderFailure> for NotificationProviderOutcome {
+    fn from(failure: ProviderFailure) -> Self {
+        failure.as_provider_outcome()
+    }
+}
+
 /// Provider attempt outcome before product persistence finalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -290,6 +472,68 @@ pub enum NotificationProviderOutcome {
 }
 
 impl NotificationProviderOutcome {
+    /// Provider accepted the notification.
+    #[must_use]
+    pub const fn accepted() -> Self {
+        Self::Accepted
+    }
+
+    /// Provider failed in a retryable way.
+    #[must_use]
+    pub const fn retryable(retry_after: Option<Duration>) -> Self {
+        Self::RetryableFailure { retry_after }
+    }
+
+    /// Provider failed in a retryable way with a provider retry hint.
+    #[must_use]
+    pub const fn retryable_after(retry_after: Duration) -> Self {
+        Self::RetryableFailure {
+            retry_after: Some(retry_after),
+        }
+    }
+
+    /// Provider failed in a retryable way without a provider retry hint.
+    #[must_use]
+    pub const fn retryable_without_hint() -> Self {
+        Self::RetryableFailure { retry_after: None }
+    }
+
+    /// Provider rejected the notification permanently.
+    #[must_use]
+    pub const fn permanent_failure() -> Self {
+        Self::PermanentFailure
+    }
+
+    /// Provider side effect may have happened, but local completion is unknown.
+    #[must_use]
+    pub const fn ambiguous_after_side_effect() -> Self {
+        Self::AmbiguousAfterSideEffect
+    }
+
+    /// Convert sanitized failure metadata to provider outcome vocabulary.
+    #[must_use]
+    pub const fn from_provider_failure(failure: &ProviderFailure) -> Self {
+        failure.as_provider_outcome()
+    }
+
+    /// Whether this outcome represents a retryable provider failure.
+    #[must_use]
+    pub const fn is_retryable_failure(&self) -> bool {
+        matches!(self, Self::RetryableFailure { .. })
+    }
+
+    /// Whether this outcome represents a permanent provider failure.
+    #[must_use]
+    pub const fn is_permanent_failure(&self) -> bool {
+        matches!(self, Self::PermanentFailure)
+    }
+
+    /// Whether this outcome represents an ambiguous provider side effect.
+    #[must_use]
+    pub const fn is_ambiguous_after_side_effect(&self) -> bool {
+        matches!(self, Self::AmbiguousAfterSideEffect)
+    }
+
     /// Convert to durable delivery-core outcome vocabulary.
     #[must_use]
     pub const fn as_delivery_outcome(&self) -> DeliveryAttemptOutcome {
@@ -345,9 +589,7 @@ mod tests {
 
     #[test]
     fn maps_provider_outcomes_to_delivery_outcomes() {
-        let outcome = NotificationProviderOutcome::RetryableFailure {
-            retry_after: Some(Duration::from_secs(30)),
-        };
+        let outcome = NotificationProviderOutcome::retryable_after(Duration::from_secs(30));
         assert_eq!(
             outcome.as_delivery_outcome(),
             DeliveryAttemptOutcome::RetryableFailure {
@@ -355,9 +597,52 @@ mod tests {
             }
         );
         assert_eq!(
-            NotificationProviderOutcome::AmbiguousAfterSideEffect.as_delivery_outcome(),
+            NotificationProviderOutcome::ambiguous_after_side_effect().as_delivery_outcome(),
             DeliveryAttemptOutcome::AmbiguousAfterSideEffect
         );
+    }
+
+    #[test]
+    fn provider_failure_metadata_maps_to_existing_outcome() {
+        let failure = ProviderFailure::retryable_after(Duration::from_secs(45))
+            .with_code("http_503")
+            .unwrap();
+        assert_eq!(failure.class(), ProviderFailureClass::Retryable);
+        assert_eq!(failure.code().unwrap().as_str(), "http_503");
+        assert_eq!(
+            failure.as_provider_outcome(),
+            NotificationProviderOutcome::retryable_after(Duration::from_secs(45))
+        );
+        assert!(failure.as_provider_outcome().is_retryable_failure());
+    }
+
+    #[test]
+    fn provider_failure_code_rejects_raw_provider_details() {
+        assert!(ProviderFailureCode::new("web_push_subscription_gone").is_ok());
+        assert!(matches!(
+            ProviderFailureCode::new("https://push.example/token"),
+            Err(NotificationError::InvalidCharacter { ch: ':', .. })
+        ));
+        assert!(matches!(
+            ProviderFailureCode::new("user@example.test"),
+            Err(NotificationError::InvalidCharacter { ch: '@', .. })
+        ));
+        assert!(matches!(
+            ProviderFailureCode::new("smtp response"),
+            Err(NotificationError::InvalidCharacter { ch: ' ', .. })
+        ));
+        assert!(matches!(
+            ProviderFailureCode::new("bearer:secret"),
+            Err(NotificationError::InvalidCharacter { ch: ':', .. })
+        ));
+        assert!(matches!(
+            ProviderFailureCode::new("jwt.header.payload"),
+            Err(NotificationError::InvalidCharacter { ch: '.', .. })
+        ));
+        assert!(matches!(
+            ProviderFailureCode::new("HTTP_503"),
+            Err(NotificationError::InvalidCharacter { ch: 'H', .. })
+        ));
     }
 
     #[test]
