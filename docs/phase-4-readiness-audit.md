@@ -5,12 +5,12 @@ Date: 2026-06-28.
 Scope: phase 4 from
 `/home/dean/chairman/docs/world-infra-unified-extraction-plan.md`.
 
-Conclusion: Phase 4 is implemented for `world-event-core` and the narrow
-delivery-facing slice of `notification-core`. `event-fanout` remains deferred.
-The shared crates contain only product-neutral event envelope metadata,
-notification delivery metadata, and validators. Chairman and Airline
-notification canaries target exact `world-infra` revision
-`2b4527c87d12baa5bc485bde2e1fdf02ba1b9be9`.
+Conclusion: Phase 4 is implemented for `world-event-core`, the narrow
+delivery-facing slice of `notification-core`, and real `delivery-core` adapter
+adoption in both products. `event-fanout` remains deferred. The shared crates
+contain only product-neutral event envelope metadata, notification delivery
+metadata, delivery worker contracts, and validators. Product SQL schemas,
+provider clients, notification categories, and event payloads remain local.
 
 ## world-event-core
 
@@ -32,7 +32,7 @@ Shared implementation evidence:
 - Product-neutral tests cover metadata validation, no-incarnation envelopes, and
   incarnation-aware envelopes.
 
-Product canary evidence:
+Product adoption evidence:
 
 - Chairman `chairman-game-db` constructs a
   `WorldRef<Uuid, NoIncarnation>` envelope from existing
@@ -75,15 +75,21 @@ Shared implementation evidence:
   channel-specific syntax and provider policy in products.
 - `NotificationProviderOutcome` maps to `delivery-core::DeliveryAttemptOutcome`
   so provider adapters can share retry/finalization vocabulary.
+- `NotificationAttempt` makes provider attempt metadata positive and 1-based at
+  the type boundary.
 
 Product canary evidence:
 
-- Airline maps notification delivery rows, channels, delivery versions, and
-  retry outcomes through the shared types while preserving its notification
-  center schema and delivery-version reopen semantics.
-- Chairman maps external alert delivery claims and provider outcomes through the
-  shared types while preserving its alert categories, urgency, payloads, and
-  recipient policy.
+- Airline maps notification delivery rows, channels, delivery versions,
+  positive provider attempts, and retry outcomes through shared types while
+  preserving its notification center schema and delivery-version reopen
+  semantics. Its notification worker uses `delivery-core` claim/finalize
+  envelopes around product-owned repository calls.
+- Chairman maps external alert delivery claims, channels, positive provider
+  attempts, and provider outcomes through shared types while preserving its
+  alert categories, urgency, payloads, and recipient policy. Its external alert
+  worker uses `delivery-core` claim/finalize envelopes around product-owned
+  SQL helpers for SMTP, webhook, browser push, FCM, and APNS modes.
 
 Recorded local gates:
 
@@ -98,12 +104,15 @@ cargo test --workspace --no-default-features
 # Chairman
 cargo fmt --check
 cargo test -p chairman-game-db external_alert_claim_maps_to_shared_notification_delivery_context
+cargo test -p chairman-game-db external_alert_claim_rejects_invalid_shared_attempt
 cargo test -p chairman-game-db cycle_completed_outbox_metadata_fits_world_event_envelope
-cargo clippy -p chairman-game-db --all-targets -- -D warnings
+cargo test -p chairman-worker alert_retry_backoff_is_bounded_and_terminal
+cargo clippy -p chairman-worker -p chairman-game-db --all-targets -- -D warnings
 
 # Airline
 cargo fmt --check
 cargo test -p loco-app work_item
+cargo test -p loco-app delivery_state
 cargo test -p loco-app cycle_completed_metadata_fits_world_event_envelope
 cargo clippy -p loco-app --lib -- -D warnings
 ```
@@ -141,9 +150,12 @@ Required future gate:
 
 Phase 4 release-candidate evidence:
 
-1. shared release source: `2b4527c87d12baa5bc485bde2e1fdf02ba1b9be9`;
-2. release tag: `world-infra-v0.1.0-rc.11`;
-3. Chairman canary commit: `c664fc699abc8a7edf345feb44e34a728d7dcd36`;
-4. Airline canary commit: `6ac16b3a8dc1320f97c140ca579aeb76f4d0785c`;
+1. shared release source: `4fee1090d9b787b0e78b9af8bff156215beee885`;
+2. next release tag: pending after product CI, expected
+   `world-infra-v0.1.0-rc.12`;
+3. Chairman delivery-core adoption commit:
+   `4771761513b74c9c900c639210c00d08cfd8f014`;
+4. Airline delivery-core/notification-core adoption commit:
+   `b21f98cdd6905a30e162fa43c114bb7287168359`;
 5. release review confirms `event-fanout` remains deferred and
    `notification-core` remains delivery-metadata-only.
