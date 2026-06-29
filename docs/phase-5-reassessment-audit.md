@@ -237,7 +237,12 @@ Local verification after the final Phase 5 review fixes:
 - world-infra:
   `cargo fmt --check`;
   `cargo test -p event-fanout -p world-cycle-core`;
-  `cargo clippy -p event-fanout -p world-cycle-core --all-targets -- -D warnings`.
+  `cargo clippy -p event-fanout -p world-cycle-core --all-targets -- -D warnings`;
+  `cargo test -p world-test-containers --no-default-features`;
+  `cargo test -p world-test-containers --features postgres`;
+  `cargo test -p world-test-containers --features valkey`;
+  `cargo test -p world-test-containers --all-features`;
+  `cargo clippy -p world-test-containers --all-targets --all-features -- -D warnings`.
 - Chairman:
   `cargo check -p chairman-game-db -p chairman-api -p chairman-worker --all-targets`;
   `cargo fmt --check`;
