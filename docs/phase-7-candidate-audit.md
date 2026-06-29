@@ -137,7 +137,7 @@ Chairman:
 
 ## Completion Criteria
 
-Phase 7's initial RFC/test-mapping slice is complete when:
+Phase 7 is complete as a design/RFC/test-mapping phase when:
 
 - Successor RFCs record product evidence matrices for Airline and Chairman.
 - Each RFC makes an explicit implement, defer, or reject decision.
@@ -146,6 +146,29 @@ Phase 7's initial RFC/test-mapping slice is complete when:
 - Future implementation scope is small enough to avoid shared SQL policy,
   product schema ownership, and provider/runtime backend ownership.
 
-For the current Phase 7 slice, both successor RFCs explicitly defer
-implementation and name the product characterization tests that must keep passing
-before either candidate can move beyond design.
+Phase 7 completion evidence:
+
+- `world-infra` Phase 7 RFC/test mapping source:
+  `5a4033ca343f149aae80da05e53366799db970b4`.
+- `world-infra` CI:
+  <https://github.com/DeanStr/world-infra/actions/runs/28388688717>
+  completed successfully for
+  `5a4033ca343f149aae80da05e53366799db970b4`.
+- Chairman characterization source:
+  `7156d695857a951d807ad7dc2fd2dcb430979258`.
+- Chairman CI:
+  <https://github.com/DeanStr/chairman/actions/runs/28388688947>
+  completed successfully for
+  `7156d695857a951d807ad7dc2fd2dcb430979258`.
+- Airline product canary source:
+  `4cf108b5bc276c1d9ce7bb0ca9e416af7915cd88`.
+- Airline CI:
+  <https://github.com/DeanStr/airline-modern/actions/runs/28386264697>
+  completed successfully for
+  `4cf108b5bc276c1d9ce7bb0ca9e416af7915cd88`.
+
+Both successor RFCs explicitly defer implementation and name the product
+characterization tests that must keep passing before either candidate can move
+beyond design. Phase 7 did not add a `world-cycle-sqlx` crate,
+`world-followup-sqlx` crate, shared SQL, migrations, pool wrappers, or shared
+runtime/provider backends.
