@@ -73,6 +73,8 @@ cargo clippy -p world-test-containers --all-targets --all-features -- -D warning
 
 Consumer canaries:
 
-- Airline replaces its local Postgres and Valkey image wrappers.
-- Chairman adds or converts one disposable Postgres smoke without changing
-  normal service-free local test gates.
+- Airline `80b60c4c1` replaces its local Postgres and Valkey image wrappers
+  while preserving existing `loco_app::test_postgres` and
+  `loco_app::test_redis` exports.
+- Chairman `3643c3b` adds a normal image-defaults test and an ignored disposable
+  Postgres smoke without changing normal service-free local test gates.
