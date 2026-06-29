@@ -40,7 +40,8 @@ classification and sanitized labels.
 Airline maps existing SMTP send error semantics into the shared outcome:
 
 - local setup/build failures are not provider outcomes;
-- SMTP/provider-not-accepted failures map to retryable provider failure;
+- retryable SMTP/provider failures map to retryable provider failure;
+- permanent SMTP/provider rejections map to permanent provider failure;
 - ambiguous SMTP send failures map to ambiguous-after-side-effect.
 
 Airline maps Web Push send errors into the shared outcome:

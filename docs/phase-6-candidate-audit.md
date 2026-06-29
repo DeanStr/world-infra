@@ -3,9 +3,8 @@
 Date: 2026-06-29
 
 Scope: post-Phase 5 reassessment across `/home/dean/world-infra`,
-`/home/dean/chairman`, and `/home/dean/airline`. This audit chooses and records
-the next implementation slice and records the resulting release/product canary
-evidence.
+`/home/dean/chairman`, and `/home/dean/airline`. This audit records the chosen
+implementation slice plus the resulting release/product canary evidence.
 
 Conclusion: Phase 6 is implemented as a narrow notification provider-outcome
 adapter slice in `notification-core`. Broad SQL extraction remains deferred.
@@ -50,10 +49,10 @@ Boundaries for this slice:
 
 Product evidence:
 
-- Airline already distinguishes local email setup/build failures,
-  SMTP/provider-not-accepted failures, and ambiguous send outcomes in
-  `apps/loco-app/src/services/email.rs`, and Web Push errors distinguish
-  permanent expired subscriptions from transient send failures in
+- Airline already distinguishes local email setup/build failures, retryable
+  SMTP/provider failures, permanent SMTP/provider rejections, and ambiguous send
+  outcomes in `apps/loco-app/src/services/email.rs`, and Web Push errors
+  distinguish permanent expired subscriptions from transient send failures in
   `apps/loco-app/src/services/push.rs`.
 - Chairman currently treats external alert provider failures through the
   delivery retry/exhaustion policy in `apps/chairman-worker/src/delivery_utils.rs`
@@ -64,9 +63,9 @@ Product evidence:
 
 Acceptance gates:
 
-- Airline SMTP tests cover local/pre-provider failures,
-  provider-not-accepted failures, and ambiguous outcomes without moving SMTP
-  client behavior into world-infra.
+- Airline SMTP tests cover local/pre-provider failures, retryable provider
+  failures, permanent provider rejections, and ambiguous outcomes without moving
+  SMTP client behavior into world-infra.
 - Airline Web Push tests cover permanently invalid subscriptions versus
   transient send failures while keeping subscription retirement product-owned.
 - Chairman external-alert tests prove current retry/exhaustion behavior is
