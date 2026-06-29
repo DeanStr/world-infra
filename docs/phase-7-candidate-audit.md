@@ -30,6 +30,11 @@ document as the accepted deferral baseline, not as a competing source of truth.
 The successor RFCs should supersede only the SQL deferral sections they
 explicitly replace.
 
+Phase 7 successor RFC drafts:
+
+- `docs/rfcs/world-cycle-sqlx-phase-7.md`;
+- `docs/rfcs/world-followup-sqlx-phase-7.md`.
+
 Both candidates are useful, but both touch tables, transaction ownership,
 leases, retry state, and product-specific recovery paths. Those are exactly the
 places where Phase 5 and Phase 6 showed that vocabulary-first extraction works
