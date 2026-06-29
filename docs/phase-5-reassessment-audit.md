@@ -15,11 +15,12 @@ helpers remain deferred.
 
 Implementation snapshot:
 
-- Shared source: `8d582c230e42c87f3f8cc175b91bbeb83f5e4e37`.
-- Airline canary: `ddbeb28ee5e0e4c24bc89a2e2c95b2e23b59a12c`.
-- Chairman canary: `51a495fa13ce666ffe857805ef9f86c1722b018a`.
-- A final tag and GitHub Actions evidence can be cut after local review; no
-  additional code is required for Phase 5 completion.
+- Shared source: `1d0d34686efa0cd648c5d979c3eaa1ae8fb5cf80`
+  (`world-infra-v0.1.0-rc.14`).
+- Airline canary: `780e170db47dc69a09d2aefb94993d61912a8f10`.
+- Chairman canary: `06cd8fa081f3649d89a52ec9ecf882076915a0c4`.
+- Final local and GitHub Actions evidence is recorded below; no additional code
+  is required for Phase 5 completion.
 
 ## 1. world-cycle-core And world-cycle-sqlx
 
@@ -58,8 +59,9 @@ Verification:
 
 - `cargo test -p world-cycle-core`;
 - `cargo clippy -p world-cycle-core --all-targets -- -D warnings`;
-- Airline: `cargo check -p loco-app --lib`;
-- Chairman: `cargo check -p chairman-game-db --all-targets`;
+- Airline: `cargo check -p airline-utils -p loco-app -p sim-engine --lib`;
+- Chairman:
+  `cargo check -p chairman-game-db -p chairman-api -p chairman-worker --all-targets`;
 - See `docs/rfcs/world-cycle-followup-sqlx-phase-5.md`.
 
 ## 2. world-followup-sqlx
@@ -132,10 +134,11 @@ Verification:
 
 - `cargo test -p event-fanout`;
 - `cargo clippy -p event-fanout --all-targets -- -D warnings`;
-- Airline focused event tests after pinning the product to the implementation
-  revision;
-- Chairman API world-event WebSocket tests after pinning the product to the
-  implementation revision.
+- Airline: `cargo check -p airline-utils -p loco-app -p sim-engine --lib`
+  after pinning the product to the implementation revision;
+- Chairman:
+  `cargo check -p chairman-game-db -p chairman-api -p chairman-worker --all-targets`
+  after pinning the product to the implementation revision.
 
 Deferred:
 
@@ -215,21 +218,45 @@ Product adoption:
   `cargo test -p world-test-containers --features valkey`;
   `cargo test -p world-test-containers --all-features`;
   `cargo clippy -p world-test-containers --all-targets --all-features -- -D warnings`.
-- Airline canary `80b60c4c1`:
+- Airline canary `780e170db47dc69a09d2aefb94993d61912a8f10`:
   `cargo fmt --check`;
   `cargo check -p airline-utils --features tc`;
   `cargo check -p loco-app --features tc --lib`;
   `cargo test -p airline-utils --features tc`;
   `cargo check -p sim-engine --features tc --lib`.
-- Chairman canary `3643c3b`:
+- Chairman canary `06cd8fa081f3649d89a52ec9ecf882076915a0c4`:
   `cargo fmt --check`;
   `cargo test -p chairman-game-db shared_postgres_image_uses_chairman_test_defaults`;
   `cargo check -p chairman-game-db --all-targets`;
   `cargo test -p chairman-game-db`.
 
+## Final Evidence
+
+Local verification after the final Phase 5 review fixes:
+
+- world-infra:
+  `cargo fmt --check`;
+  `cargo test -p event-fanout -p world-cycle-core`;
+  `cargo clippy -p event-fanout -p world-cycle-core --all-targets -- -D warnings`.
+- Chairman:
+  `cargo check -p chairman-game-db -p chairman-api -p chairman-worker --all-targets`;
+  `cargo fmt --check`;
+  `cargo test -p chairman-game-db cycle_status_sql_binds_cast_text_to_product_enum`.
+- Airline:
+  `cargo check -p airline-utils -p loco-app -p sim-engine --lib`;
+  `cargo fmt --check`.
+
+GitHub Actions evidence:
+
+- world-infra `1d0d34686efa0cd648c5d979c3eaa1ae8fb5cf80`: CI success,
+  run `28356041368`.
+- Chairman `06cd8fa081f3649d89a52ec9ecf882076915a0c4`: CI success,
+  run `28356171996`.
+- Airline `780e170db47dc69a09d2aefb94993d61912a8f10`: CI success,
+  run `28356172538`.
+
 ## Phase 5 Queue
 
-1. Release hygiene: tag the final Phase 5 shared source and record GitHub
-   Actions evidence.
-2. Future phase: revisit `world-cycle-sqlx` and `world-followup-sqlx` only after
-   both products intentionally converge on SQL adapter traits or table shapes.
+1. Future phase: revisit `world-cycle-sqlx` and `world-followup-sqlx` only
+   after both products intentionally converge on SQL adapter traits or table
+   shapes.
