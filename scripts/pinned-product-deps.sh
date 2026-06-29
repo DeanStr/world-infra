@@ -73,10 +73,12 @@ world-identity-core = { git = "$url", rev = "$rev" }
 world-telemetry = { git = "$url", rev = "$rev", features = ["otlp-http"] }
 world-test-lite = { git = "$url", rev = "$rev" }
 testcontainers = { version = "0.27", default-features = false }
+url = "2.5"
 world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["postgres"] }
 
 # Chairman crates/chairman-game-db dev-dependencies
 testcontainers = { workspace = true }
+url = { workspace = true }
 world-test-containers = { workspace = true }
 
 # Airline apps/airline-utils dependencies
