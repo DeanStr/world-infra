@@ -452,16 +452,13 @@ pub fn retention_cutoff_cycle(completed_cycle: i64, keep_cycles: NonZeroU32) -> 
 }
 
 fn duration_to_i64_seconds(duration: Duration) -> i64 {
-    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+    let seconds = duration.as_secs();
+    let rounded = seconds.saturating_add(u64::from(duration.subsec_nanos() > 0));
+    i64::try_from(rounded).unwrap_or(i64::MAX)
 }
 
 fn duration_to_positive_i64_seconds(duration: Duration) -> i64 {
-    let seconds = duration.as_secs();
-    if seconds == 0 {
-        1
-    } else {
-        i64::try_from(seconds).unwrap_or(i64::MAX)
-    }
+    duration_to_i64_seconds(duration).max(1)
 }
 
 #[cfg(test)]
@@ -510,6 +507,17 @@ mod tests {
         .unwrap();
         assert_eq!(policy.ttl_seconds(), 1);
         assert_eq!(policy.expires_at(41), 42);
+    }
+
+    #[test]
+    fn lease_policy_rounds_fractional_ttl_up_to_unix_seconds() {
+        let policy = LeasePolicy::new(
+            WorkerId::new("worker-a").unwrap(),
+            Duration::from_millis(1500),
+        )
+        .unwrap();
+        assert_eq!(policy.ttl_seconds(), 2);
+        assert_eq!(policy.expires_at(40), 42);
     }
 
     #[test]

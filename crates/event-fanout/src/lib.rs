@@ -227,7 +227,13 @@ impl FanoutFailure {
     pub fn new(kind: FanoutFailureKind, message: impl fmt::Display) -> Self {
         let mut message = message.to_string();
         if message.len() > MAX_FAILURE_MESSAGE_LEN {
-            message.truncate(MAX_FAILURE_MESSAGE_LEN);
+            let truncate_at = message
+                .char_indices()
+                .map(|(index, _)| index)
+                .take_while(|index| *index <= MAX_FAILURE_MESSAGE_LEN)
+                .last()
+                .unwrap_or(0);
+            message.truncate(truncate_at);
         }
         Self { kind, message }
     }
@@ -402,6 +408,20 @@ mod tests {
             local_broadcast_outcome(Err(())),
             PublishOutcome::NoSubscribers
         );
+    }
+
+    #[test]
+    fn failure_message_truncates_on_utf8_boundary() {
+        let message = format!(
+            "{}{}",
+            "a".repeat(MAX_FAILURE_MESSAGE_LEN - 1),
+            "é".repeat(8)
+        );
+
+        let failure = FanoutFailure::clear(message);
+
+        assert_eq!(failure.message().len(), MAX_FAILURE_MESSAGE_LEN - 1);
+        assert!(failure.message().is_char_boundary(failure.message().len()));
     }
 
     #[test]
