@@ -4,8 +4,8 @@ Date: 2026-06-29
 
 Scope: post-Phase 5 reassessment across `/home/dean/world-infra`,
 `/home/dean/chairman`, and `/home/dean/airline`. This audit chooses and records
-the next implementation slice without cutting a release tag or changing product
-pins.
+the next implementation slice and records the resulting release/product canary
+evidence.
 
 Conclusion: Phase 6 is implemented as a narrow notification provider-outcome
 adapter slice in `notification-core`. Broad SQL extraction remains deferred.
@@ -144,7 +144,8 @@ Implemented shared surface:
 Implemented product adoption:
 
 - Airline maps `EmailSendError` local/pre-provider failures to no provider
-  outcome, provider-not-accepted failures to retryable provider outcomes, and
+  outcome, retryable SMTP/provider failures to retryable provider outcomes,
+  permanent SMTP/provider rejections to permanent provider outcomes, and
   ambiguous SMTP outcomes to ambiguous provider outcomes.
 - Airline maps `WebPushSendError` transient/permanent outcomes into shared
   provider outcomes and uses that outcome in notification push delivery.
@@ -153,6 +154,11 @@ Implemented product adoption:
 
 Final verification evidence:
 
+- Release:
+  - tag: `world-infra-v0.1.0-rc.15`
+  - shared source: `c7e55952da397856f945f232d8816c347c6dd9fb`
+  - Airline canary: `f3b52ecbe2e7d44283dd55674c212552acff52b7`
+  - Chairman canary: `6a60862b197416cfe52701d73332a272623693ce`
 - world-infra:
   - `cargo test -p notification-core`
   - `cargo clippy -p notification-core --all-targets -- -D warnings`
@@ -169,3 +175,12 @@ Cargo emitted existing local path-override warnings in Airline and Chairman
 because those workspaces override pinned world-infra git dependencies to
 `/home/dean/world-infra` for iteration. The focused checks completed
 successfully.
+
+GitHub CI evidence:
+
+- world-infra `ci` passed for `c7e55952da397856f945f232d8816c347c6dd9fb`
+  in run `28372133625`.
+- Airline `ci` passed for `f3b52ecbe2e7d44283dd55674c212552acff52b7`
+  in run `28374961909`.
+- Chairman `CI` passed for `6a60862b197416cfe52701d73332a272623693ce`
+  in run `28374960875`.
