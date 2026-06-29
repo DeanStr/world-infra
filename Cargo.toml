@@ -14,6 +14,7 @@ members = [
     "crates/notification-core",
     "crates/world-test-containers",
     "crates/event-fanout",
+    "crates/world-cycle-core",
 ]
 resolver = "2"
 

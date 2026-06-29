@@ -68,6 +68,7 @@ notification-core = { git = "$url", rev = "$rev" }
 rate-limit-core = { git = "$url", rev = "$rev", features = ["redis"] }
 tenant-scope-sqlx = { git = "$url", rev = "$rev" }
 world-clock-core = { git = "$url", rev = "$rev" }
+world-cycle-core = { git = "$url", rev = "$rev" }
 world-env = { git = "$url", rev = "$rev" }
 world-event-core = { git = "$url", rev = "$rev" }
 world-identity-core = { git = "$url", rev = "$rev" }
@@ -97,6 +98,7 @@ notification-core = { git = "$url", rev = "$rev" }
 rate-limit-core = { git = "$url", rev = "$rev", features = ["redis"] }
 tenant-scope-sqlx = { git = "$url", rev = "$rev", default-features = false, features = ["sqlx-postgres"] }
 world-clock-core = { git = "$url", rev = "$rev" }
+world-cycle-core = { git = "$url", rev = "$rev" }
 world-telemetry = { git = "$url", rev = "$rev", features = ["otlp-grpc-tonic"] }
 world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["valkey"], optional = true }
 

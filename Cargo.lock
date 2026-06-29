@@ -3249,6 +3249,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "world-cycle-core"
+version = "0.1.0"
+
+[[package]]
 name = "world-env"
 version = "0.1.0"
 
