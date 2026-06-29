@@ -29,9 +29,9 @@ clients, or notification policy into world-infra.
 | Chairman | `/home/dean/chairman/apps/chairman-worker/src/delivery_utils.rs` | `delivery-core` and `notification-core` adapters classify claim/finalize outcomes, but retry exhaustion remains product policy. | Shared follow-up SQL must not change retry-until-exhaustion behavior or provider outcome policy. |
 | Chairman | `/home/dean/chairman/docs/chairman-game/15-worker-jobs-and-crash-recovery.md` | Post-finalization work includes WebSocket fanout, notifications, analytics, delivery, cache invalidation, and audit events through durable outbox rows. | The RFC must distinguish follow-up scheduling from notification/provider delivery. |
 
-## Decision
+## Phase 7 Decision
 
-Defer implementation. Write only the trait-boundary contract now.
+Defer implementation. Approve only the trait-boundary design lane now.
 
 The current evidence supports shared terminology and tests, not a shared SQL
 backend. Airline's table is a cycle-step retry state machine. Chairman's current
@@ -119,30 +119,45 @@ Contract constraints:
 - Rollback: products continue using local SQL and `world-cycle-core`,
   `delivery-core`, and `notification-core` helpers.
 
-## Required Product Characterization Tests
+## Product Characterization Tests
 
 Airline:
 
-- Terminal follow-up rows are not overwritten by later retry recording.
-- Due follow-up claims respect lease ownership and lease expiry.
-- Exhausted follow-ups stop retrying.
-- Ambiguous follow-up marker failures do not automatically duplicate side
+- `claim_due_cycle_followups_leases_rows_until_the_lease_expires` proves due
+  follow-up claims respect lease ownership and lease expiry.
+- `delayed_followup_rows_are_not_claimed_until_due` proves retry delay is honored
+  before claiming.
+- `claimed_retry_executes_known_steps_and_marks_them_complete` proves known
+  follow-up steps reach a terminal complete state.
+- `claimed_retry_exhausts_unknown_steps_without_requeueing` proves terminal
+  exhausted follow-ups stop retrying.
+- `completion_marker_failure_after_side_effect_is_listed_for_manual_reconciliation`
+  proves ambiguous follow-up marker failures do not automatically duplicate side
   effects.
 
 Chairman:
 
-- Outbox delivery remains independent from cycle finalization.
-- External alert delivery leases can be reclaimed after expiry.
-- Retryable failures without provider hints still requeue with product default
-  delay.
-- Retry exhaustion remains controlled by Chairman's max-attempt policy, not by
-  provider classification alone.
+- `cycle_completed_outbox_metadata_fits_world_event_envelope` proves cycle
+  completion is recorded through durable outbox metadata, separate from provider
+  delivery.
+- `external_alert_claim_maps_to_shared_notification_delivery_context` proves
+  claimed external alert rows map into shared notification delivery context
+  without moving provider policy into world-infra.
+- `alert_retry_backoff_is_bounded_and_terminal` proves retryable failures without
+  provider hints requeue with Chairman's default delay and eventually become
+  terminal.
+- `alert_provider_outcome_adapter_does_not_change_exhaustion_policy` proves retry
+  exhaustion remains controlled by Chairman's max-attempt policy, not provider
+  classification alone.
+- `scripts/chairman-backend-smoke.sh` assertions `admin cycle repair dry run`,
+  `admin cycle repair apply`, and worker external-alert drain checks remain the
+  DB-backed coverage for outbox and alert delivery recovery.
 
 ## Verification Before Implementation
 
-- RFC accepted with an explicit implement/defer decision.
+- RFC accepted with an explicit defer decision.
 - Adapter sketches reviewed against both product repos.
-- Product tests named above exist or are mapped to existing test names.
+- Product tests named above exist.
 - `cargo test -p world-cycle-core -p delivery-core -p notification-core` remains
   green.
 - Product canaries prove behavior is unchanged before any future

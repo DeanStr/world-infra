@@ -28,9 +28,9 @@ its own schema, enum labels, migrations, and authority checks.
 | Chairman | `/home/dean/chairman/crates/chairman-game-db/src/rules/persistence/cycle_events.rs` | Shared `CyclePhaseStatus` maps to product enum labels, including `Complete -> "completed"`, and SQL binds are cast to product enum types. | Status mapping belongs in the product adapter unless both products intentionally adopt one persisted enum shape. |
 | Chairman | `/home/dean/chairman/docs/chairman-game/15-worker-jobs-and-crash-recovery.md` | Chairman documents compatible leases, phase state, finalization, outbox, and repair concepts, but its implementation is intentionally newer and product-owned. | Phase 7 should add characterization tests before extraction, especially for repair, stale jobs, and outbox boundaries. |
 
-## Decision
+## Phase 7 Decision
 
-Defer implementation. Write only the trait-boundary contract now.
+Defer implementation. Approve only the trait-boundary design lane now.
 
 The current evidence supports a future adapter trait, but not shared SQL. Airline
 has stronger incarnation and tenant-scope requirements than Chairman. Chairman
@@ -122,30 +122,45 @@ Contract constraints:
   product-owned.
 - Rollback: products continue using local SQL and `world-cycle-core` helpers.
 
-## Required Product Characterization Tests
+## Product Characterization Tests
 
 Airline:
 
-- Claiming a phase for a stale world incarnation is rejected.
-- A stale running phase is reclaimed only after the owning run lease is gone.
-- An `applied` phase can be completed without replaying its side effect.
-- Finalization remains the only authority boundary for advancing the settled
-  cycle.
+- `run_cycle_skips_stale_world_instance_job_before_mutation` proves stale
+  world-instance cycle jobs do not mutate world state.
+- `stale_world_instance_cannot_acquire_reused_world_run_lease` proves stale
+  incarnations cannot acquire a reused numeric world's run lease.
+- `cycle_phase_applied_state_skips_side_effect_and_can_complete_later` proves an
+  `applied` phase can be completed without replaying the side effect.
+- `cycle_phase_running_rows_are_busy_for_other_owners` and
+  `cycle_phase_running_rows_can_be_reclaimed_after_owner_lease_is_stale` prove
+  stale running phases are reclaimed only after the owning run lease is no longer
+  live.
+- `world_finalizing_requires_matching_run_lease_owner` and
+  `complete_world_finalizing_is_owner_scoped_and_does_not_double_advance` prove
+  finalization is owner-scoped and is the authority boundary for advancing the
+  settled cycle.
 
 Chairman:
 
-- Shared completion status still maps to the product's persisted completion
-  label.
-- Bound status values remain cast to the product enum type.
-- Manual and scheduled cycle claims use the same product finalization path.
-- Cycle repair releases stale clock/job state without directly advancing football
-  state.
+- `chairman_cycle_status_maps_shared_completion_to_product_label` proves shared
+  completion vocabulary still maps to Chairman's persisted `"completed"` label.
+- `cycle_status_sql_binds_cast_text_to_product_enum` proves bound status values
+  remain cast to the product enum type.
+- `due_and_manual_cycle_claims_use_the_same_execution_target_shape` proves
+  scheduled and manual cycle claims feed the same target/finalization path while
+  preserving the product's final status.
+- `phase_idempotency_keys_use_stable_phase_names` proves persisted phase
+  idempotency keys remain product-stable.
+- `scripts/chairman-backend-smoke.sh` assertions `admin cycle repair dry run`
+  and `admin cycle repair apply` prove repair releases stale clock/job state
+  without directly advancing football state.
 
 ## Verification Before Implementation
 
-- RFC accepted with an explicit implement/defer decision.
+- RFC accepted with an explicit defer decision.
 - Adapter sketches reviewed against both product repos.
-- Product tests named above exist or are mapped to existing test names.
+- Product tests named above exist.
 - `cargo test -p world-cycle-core` remains green.
 - Product canaries prove behavior is unchanged before any future `world-cycle-sqlx`
   release candidate is tagged.

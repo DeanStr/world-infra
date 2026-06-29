@@ -137,7 +137,7 @@ Chairman:
 
 ## Completion Criteria
 
-Phase 7 is complete only when:
+Phase 7's initial RFC/test-mapping slice is complete when:
 
 - Successor RFCs record product evidence matrices for Airline and Chairman.
 - Each RFC makes an explicit implement, defer, or reject decision.
@@ -145,3 +145,7 @@ Phase 7 is complete only when:
 - Named characterization tests exist for any product behavior the RFC relies on.
 - Future implementation scope is small enough to avoid shared SQL policy,
   product schema ownership, and provider/runtime backend ownership.
+
+For the current Phase 7 slice, both successor RFCs explicitly defer
+implementation and name the product characterization tests that must keep passing
+before either candidate can move beyond design.
