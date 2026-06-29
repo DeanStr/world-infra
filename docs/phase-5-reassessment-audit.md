@@ -143,8 +143,8 @@ Reason:
 - Chairman has disposable-Postgres tests behind `CHAIRMAN_TEST_DATABASE_URL` but
   no equivalent shared container harness.
 - A test-container crate can stay product-neutral by providing images,
-  readiness waits, connection URL helpers, and optional features only. It should
-  not run product migrations or seed product data.
+  readiness waits, and optional features only. It should not run product
+  migrations or seed product data.
 
 Deferred:
 

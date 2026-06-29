@@ -20,6 +20,13 @@ jobs:
       - run: cargo test --workspace --no-default-features
       - run: cargo test --workspace --all-features --examples
       - run: cargo doc --workspace --all-features --no-deps
+      - name: Product pin snippet smoke
+        run: |
+          scripts/pinned-product-deps.sh --rev HEAD > /tmp/world-infra-product-pins.txt
+          grep -F 'testcontainers = { version = "0.27", default-features = false }' /tmp/world-infra-product-pins.txt
+          grep -F 'world-test-containers = { git = "' /tmp/world-infra-product-pins.txt
+          grep -F 'features = ["postgres"], optional = true' /tmp/world-infra-product-pins.txt
+          grep -F 'features = ["valkey"], optional = true' /tmp/world-infra-product-pins.txt
       - name: Feature matrix
         run: |
           cargo install cargo-hack --locked

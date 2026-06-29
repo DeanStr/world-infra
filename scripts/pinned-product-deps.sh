@@ -72,16 +72,19 @@ world-event-core = { git = "$url", rev = "$rev" }
 world-identity-core = { git = "$url", rev = "$rev" }
 world-telemetry = { git = "$url", rev = "$rev", features = ["otlp-http"] }
 world-test-lite = { git = "$url", rev = "$rev" }
-
-# Chairman dev-dependencies
+testcontainers = { version = "0.27", default-features = false }
 world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["postgres"] }
+
+# Chairman crates/chairman-game-db dev-dependencies
+testcontainers = { workspace = true }
+world-test-containers = { workspace = true }
 
 # Airline apps/airline-utils dependencies
 world-env = { git = "$url", rev = "$rev" }
+world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["postgres"], optional = true }
 
 # Airline apps/airline-utils dev-dependencies
 world-test-lite = { git = "$url", rev = "$rev" }
-world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["postgres", "valkey"] }
 
 # Airline apps/loco-app dependencies
 delivery-core = { git = "$url", rev = "$rev" }
@@ -91,6 +94,7 @@ rate-limit-core = { git = "$url", rev = "$rev", features = ["redis"] }
 tenant-scope-sqlx = { git = "$url", rev = "$rev", default-features = false, features = ["sqlx-postgres"] }
 world-clock-core = { git = "$url", rev = "$rev" }
 world-telemetry = { git = "$url", rev = "$rev", features = ["otlp-grpc-tonic"] }
+world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["valkey"], optional = true }
 
 # Airline apps/loco-app dev-dependencies
 idempotency-core = { git = "$url", rev = "$rev" }
