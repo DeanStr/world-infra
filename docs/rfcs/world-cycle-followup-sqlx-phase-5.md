@@ -2,15 +2,16 @@
 
 ## Status
 
-Proposed
+Accepted with implementation split.
 
 ## Summary
 
 Do not create shared SQLx crates yet. Airline has a mature cycle and follow-up
 control plane, while Chairman has compatible concepts but a newer product-shaped
-worker model. The next step is adapter sketches that prove the shared boundary:
-lease arithmetic, phase/follow-up state machines, and stale work recovery can be
-shared without freezing product table names or pipeline policy.
+worker model. Phase 5 therefore extracts the shared non-SQL boundary into
+`world-cycle-core`: lease arithmetic, phase/follow-up state vocabulary,
+retention cutoffs, and retry policy. Product table names, queries, migrations,
+and pipeline policy stay local.
 
 ## Product Evidence
 
@@ -41,14 +42,18 @@ Product-owned:
 - finalization policy and world reset/incarnation policy;
 - observability labels that expose product concepts.
 
-Shared candidates:
+Shared in `world-cycle-core`:
 
 - lease claim/release/expire calculations;
 - validated status enums for pending, running, applied, complete, exhausted,
   and failed states;
 - monotonic attempt and next-at calculations;
 - stale lease reclaim policy inputs;
-- transaction-scoped helper traits that operate on product-owned SQL.
+
+Still deferred:
+
+- transaction-scoped SQL helper traits that operate on product-owned SQL;
+- shared migrations or table names.
 
 ## API Sketch
 
@@ -97,13 +102,15 @@ unless both products intentionally adopt the same table shape.
 
 ## Verification
 
-Required before implementation:
+Implemented verification:
 
-- Airline adapter sketch against existing world-clock and follow-up tables;
-- Chairman adapter sketch against cycle jobs, outbox events, and external alert
-  deliveries;
-- tests for stale lease reclaim, lease owner mismatch, attempt cap behavior,
-  finalizing boundary, incarnation/world-instance mismatch, and
-  finalization-after-followup failure;
-- product canaries proving no duplicate WebSocket, notification, analytics, or
-  delivery side effects.
+- `world-cycle-core` tests cover phase claim mapping, active lease ownership,
+  sub-second TTL preservation for Unix-second stores, follow-up terminal/delay
+  semantics, zero-based capped retry backoff, attempt exhaustion, and retention
+  cutoffs.
+- Airline adapter canary uses shared phase claims, lease helpers, stale cutoff,
+  follow-up retry status, retry exhaustion, and retry backoff against existing
+  `world_clock`, `cycle_phase_state`, and `cycle_followup_retry_state` code.
+- Chairman adapter canary maps shared cycle completion semantics to Chairman's
+  product-owned `"completed"` SQL label in `world_cycle_jobs` and
+  `world_cycle_phase_state`.

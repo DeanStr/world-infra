@@ -5,28 +5,25 @@ Date: 2026-06-29.
 Scope: Phase 5 from
 `/home/dean/chairman/docs/world-infra-unified-extraction-plan.md`.
 
-Conclusion: Phase 5 is an incremental extraction phase, not a blanket
-extraction phase. The first shared-code candidate, `world-test-containers`, is
-implemented and adopted by both products. The next slice, `event-fanout`, is
-implemented as shared fanout vocabulary and adapter classification only; product
-databases, replay, authorization, Redis clients, and WebSocket payloads remain
-product-owned. `world-cycle-sqlx` and `world-followup-sqlx` still need product
-adapter examples before crate shells. Broader notification policy and broad DB
+Conclusion: Phase 5 is complete as an incremental extraction phase, not a
+blanket extraction phase. `world-test-containers`, `event-fanout`, and
+`world-cycle-core` are implemented and adopted by both products where they fit.
+Product databases, replay, authorization, Redis clients, WebSocket payloads,
+SQL table names, migrations, and pipeline policy remain product-owned. Shared
+SQLx crates, broader notification policy, idempotency backends, and broad DB
 helpers remain deferred.
 
-Release candidate:
+Implementation snapshot:
 
-- Shared source: `world-infra-v0.1.0-rc.13`, pointing at
-  `a366a855ac35a4e02a281a3d1c43761ca90aefc0`.
-- Airline canary: `80b60c4c1` pins that revision, replaces local Postgres and
-  Valkey image definitions with `world-test-containers`, and preserves existing
-  test helper exports.
-- Chairman canary: `3643c3b` pins that revision, adds a normal no-Docker image
-  defaults test, and adds an ignored disposable Postgres smoke.
+- Shared source: `8d582c230e42c87f3f8cc175b91bbeb83f5e4e37`.
+- Airline canary: `ddbeb28ee5e0e4c24bc89a2e2c95b2e23b59a12c`.
+- Chairman canary: `51a495fa13ce666ffe857805ef9f86c1722b018a`.
+- A final tag and GitHub Actions evidence can be cut after local review; no
+  additional code is required for Phase 5 completion.
 
-## 1. world-cycle-sqlx
+## 1. world-cycle-core And world-cycle-sqlx
 
-Decision: RFC drafted, do not create the crate yet.
+Decision: create `world-cycle-core`; defer `world-cycle-sqlx`.
 
 Evidence:
 
@@ -42,19 +39,33 @@ Evidence:
   `/home/dean/chairman/docs/chairman-game/15-worker-jobs-and-crash-recovery.md`
   and `/home/dean/chairman/crates/chairman-game-db/src/cycle.rs`.
 - The shared crate must not freeze Airline's table names or Chairman's phase
-  list. It needs product-owned table adapters or a minimal schema contract first.
+  list. Phase 5 extracts only the product-neutral state-machine and lease
+  primitives.
 
-Required before implementation:
+Completed shared implementation:
 
-- Two adapter implementations or executable sketches: Airline existing control
-  tables and Chairman cycle jobs.
-- Tests for stale lease reclaim, phase `applied` vs `complete`, finalization
-  boundary, and world-incarnation mismatch.
+- `world-cycle-core` defines `WorkerId`, `LeaseState`, `LeasePolicy`,
+  `CyclePhaseStatus`, `CyclePhaseClaim`, `FollowupRetryStatus`,
+  `RetryBackoffPolicy`, `FollowupRetryPolicy`, lease-active helpers, stale
+  cutoffs, and retention cutoffs.
+- Airline uses shared phase claim/status mapping, lease helpers, stale cutoff,
+  and retention cutoff while keeping SQL in `world_clock` and
+  `cycle_phase_state`.
+- Chairman maps shared `CyclePhaseStatus::Complete` to its product SQL label
+  `"completed"` for `world_cycle_jobs` and `world_cycle_phase_state`.
+
+Verification:
+
+- `cargo test -p world-cycle-core`;
+- `cargo clippy -p world-cycle-core --all-targets -- -D warnings`;
+- Airline: `cargo check -p loco-app --lib`;
+- Chairman: `cargo check -p chairman-game-db --all-targets`;
 - See `docs/rfcs/world-cycle-followup-sqlx-phase-5.md`.
 
 ## 2. world-followup-sqlx
 
-Decision: RFC drafted, still blocked on a second concrete implementation.
+Decision: share follow-up retry vocabulary in `world-cycle-core`; defer
+`world-followup-sqlx`.
 
 Evidence:
 
@@ -69,14 +80,20 @@ Evidence:
   `/home/dean/chairman/crates/chairman-game-db/src/cycle.rs` and
   `/home/dean/chairman/apps/chairman-worker/src/delivery_utils.rs`.
 
-Required before implementation:
+Completed shared implementation:
 
-- Chairman adapter or explicit approved deferral showing how existing outbox and
-  external delivery rows map to follow-up status, attempts, next-at, lease owner,
-  and terminal states.
-- Decision on whether the crate owns SQL tables or only query builders/traits.
-- Product canaries proving finalization-after-followup failure does not duplicate
-  WebSocket, notification, analytics, or delivery side effects.
+- Airline uses shared `FollowupRetryStatus`, `FollowupRetryPolicy`, and
+  zero-based retry backoff for `cycle_followup_retry_state`.
+- Chairman already uses `delivery-core` for external alert delivery claim/finalize
+  vocabulary; it does not need a generic cycle-follow-up SQL table yet.
+- SQL ownership stays local. A future `world-followup-sqlx` would need Chairman
+  to either adopt a generic follow-up table or map outbox/delivery rows into the
+  same trait contract.
+
+Verification:
+
+- Airline: `cargo test -p loco-app followup_retry --lib`;
+- Chairman: `cargo test -p chairman-game-db chairman_cycle_status_maps_shared_completion_to_product_label`.
 - See `docs/rfcs/world-cycle-followup-sqlx-phase-5.md`.
 
 ## 3. event-fanout
@@ -212,7 +229,7 @@ Product adoption:
 
 ## Phase 5 Queue
 
-1. Monitor Airline and Chairman CI for the `world-test-containers` canaries.
-2. Monitor Airline and Chairman CI for the `event-fanout` canaries.
-3. Turn the cycle/followup RFC into product adapter sketches before creating any
-   SQLx crate.
+1. Release hygiene: tag the final Phase 5 shared source and record GitHub
+   Actions evidence.
+2. Future phase: revisit `world-cycle-sqlx` and `world-followup-sqlx` only after
+   both products intentionally converge on SQL adapter traits or table shapes.
