@@ -7,8 +7,10 @@ Scope: Phase 5 from
 
 Conclusion: Phase 5 is an incremental extraction phase, not a blanket
 extraction phase. The first shared-code candidate, `world-test-containers`, is
-implemented and adopted by both products. `event-fanout`, `world-cycle-sqlx`,
-and `world-followup-sqlx` now have design records, but they still need product
+implemented and adopted by both products. The next slice, `event-fanout`, is
+implemented as shared fanout vocabulary and adapter classification only; product
+databases, replay, authorization, Redis clients, and WebSocket payloads remain
+product-owned. `world-cycle-sqlx` and `world-followup-sqlx` still need product
 adapter examples before crate shells. Broader notification policy and broad DB
 helpers remain deferred.
 
@@ -79,7 +81,7 @@ Required before implementation:
 
 ## 3. event-fanout
 
-Decision: RFC drafted before code.
+Decision: create `event-fanout` as a narrow shared vocabulary crate.
 
 Evidence:
 
@@ -93,14 +95,38 @@ Evidence:
   WebSocket. See
   `/home/dean/chairman/apps/chairman-api/src/routes/world_events_ws.rs` and
   `/home/dean/chairman/crates/chairman-game-db/src/read_models/events.rs`.
-- Both products agree that product databases remain authoritative, but they do
-  not yet share transport semantics or replay guarantees.
+- Both products agree that product databases remain authoritative. The shared
+  slice covers validated topics/node IDs, source identity, publish outcome
+  classification, and ambiguous-after-attempt failure semantics only.
 
-Required before implementation:
+Completed shared implementation:
 
-- Explicit ambiguous-after-side-effect policy and marker semantics.
-- Product-owned replay authority must remain outside the crate.
-- Airline adapter canary and Chairman adapter canary.
+- `event-fanout` defines `FanoutTopic`, `FanoutNodeId`, `FanoutStableId`,
+  `FanoutSource`, `FanoutFailureKind`, `FanoutFailure`, `PublishOutcome`, and
+  `local_broadcast_outcome`.
+- Redis/Valkey transport remains product-owned for now; Airline already has the
+  concrete Redis runtime, while Chairman does not yet need cross-process fanout.
+- Product-owned replay authority remains outside the crate.
+- The adapter canaries are: Airline replaces local fanout failure-kind
+  classification and local broadcast outcome classification; Chairman wraps
+  WebSocket send attempts in `PublishOutcome` while retaining polling replay.
+
+Verification:
+
+- `cargo test -p event-fanout`;
+- `cargo clippy -p event-fanout --all-targets -- -D warnings`;
+- Airline focused event tests after pinning the product to the implementation
+  revision;
+- Chairman API world-event WebSocket tests after pinning the product to the
+  implementation revision.
+
+Deferred:
+
+- Redis/Valkey shared transport primitives.
+- In-process subscriber registries beyond simple send-result classification.
+- Product event payloads, WebSocket wire shape, access control, durable markers,
+  and replay queries.
+
 - See `docs/rfcs/event-fanout-phase-5.md`.
 
 ## 4. Broader Notification Policy/Helpers
@@ -187,8 +213,6 @@ Product adoption:
 ## Phase 5 Queue
 
 1. Monitor Airline and Chairman CI for the `world-test-containers` canaries.
-2. Use the `event-fanout` RFC to build the next thin shared slice, with Airline
-   as source material and Chairman as the
-   polling-outbox counterexample.
+2. Monitor Airline and Chairman CI for the `event-fanout` canaries.
 3. Turn the cycle/followup RFC into product adapter sketches before creating any
    SQLx crate.

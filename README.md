@@ -18,6 +18,7 @@ The first extraction wave covers:
 - narrow transaction-bound SQLx scope helpers;
 - durable delivery worker vocabulary;
 - product-neutral event envelope metadata;
+- event fanout source/outcome classification;
 - notification delivery channel, target, version, and provider outcome
   vocabulary;
 - optional Testcontainers image wrappers for product integration tests.

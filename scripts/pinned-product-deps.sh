@@ -61,6 +61,7 @@ cat <<EOF
 
 # Chairman [workspace.dependencies]
 delivery-core = { git = "$url", rev = "$rev" }
+event-fanout = { git = "$url", rev = "$rev" }
 http-primitives = { git = "$url", rev = "$rev" }
 idempotency-core = { git = "$url", rev = "$rev" }
 notification-core = { git = "$url", rev = "$rev" }
@@ -90,6 +91,7 @@ world-test-lite = { git = "$url", rev = "$rev" }
 
 # Airline apps/loco-app dependencies
 delivery-core = { git = "$url", rev = "$rev" }
+event-fanout = { git = "$url", rev = "$rev" }
 http-primitives = { git = "$url", rev = "$rev" }
 notification-core = { git = "$url", rev = "$rev" }
 rate-limit-core = { git = "$url", rev = "$rev", features = ["redis"] }

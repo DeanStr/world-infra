@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted and implemented as a thin Phase 5 slice.
 
 ## Summary
 
@@ -97,11 +97,11 @@ should be feature-gated and adapter-based.
 
 Shared tests:
 
-- local subscriber registry publishes to active subscribers and drops closed
-  subscribers;
+- local broadcast classification reports active subscribers and treats closed
+  local broadcast channels as `NoSubscribers`;
 - ambiguous-after-attempt is preserved instead of downgraded to failure;
 - invalid channel/topic names are rejected;
-- Redis/Valkey feature tests use `world-test-containers::valkey::Valkey`.
+- Redis/Valkey transport remains product-owned in this slice.
 
 Consumer canaries:
 
