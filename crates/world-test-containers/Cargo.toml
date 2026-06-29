@@ -1,0 +1,20 @@
+[package]
+name = "world-test-containers"
+description = "Product-neutral Testcontainers image wrappers for persistent-world integration tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[features]
+default = []
+postgres = ["dep:testcontainers"]
+valkey = ["dep:testcontainers"]
+
+[dependencies]
+testcontainers = { workspace = true, optional = true }
+
+[lints]
+workspace = true

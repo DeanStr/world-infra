@@ -73,11 +73,15 @@ world-identity-core = { git = "$url", rev = "$rev" }
 world-telemetry = { git = "$url", rev = "$rev", features = ["otlp-http"] }
 world-test-lite = { git = "$url", rev = "$rev" }
 
+# Chairman dev-dependencies
+world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["postgres"] }
+
 # Airline apps/airline-utils dependencies
 world-env = { git = "$url", rev = "$rev" }
 
 # Airline apps/airline-utils dev-dependencies
 world-test-lite = { git = "$url", rev = "$rev" }
+world-test-containers = { git = "$url", rev = "$rev", default-features = false, features = ["postgres", "valkey"] }
 
 # Airline apps/loco-app dependencies
 delivery-core = { git = "$url", rev = "$rev" }

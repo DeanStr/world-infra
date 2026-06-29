@@ -19,7 +19,8 @@ The first extraction wave covers:
 - durable delivery worker vocabulary;
 - product-neutral event envelope metadata;
 - notification delivery channel, target, version, and provider outcome
-  vocabulary.
+  vocabulary;
+- optional Testcontainers image wrappers for product integration tests.
 
 Product adapters remain in product repositories. Shared crates expose typed
 library errors and product-neutral examples; products map those errors to their
@@ -32,6 +33,7 @@ own API responses, logs, migrations, and operator workflows.
   keeping shared crates on Rust edition 2021.
 - Runtime-heavy integrations are optional features.
 - `world-test-lite` is for dev/test use only.
+- `world-test-containers` is for dev/test use only and has no default features.
 - Reassessment candidates must not get crate shells without a design note and
   both-product approval.
 
@@ -60,4 +62,5 @@ See `docs/release-candidate-consumption.md` for the product canary flow.
 The current implementation/readiness state is recorded in:
 
 - `docs/phase-0-3-readiness-audit.md`;
-- `docs/phase-4-readiness-audit.md`.
+- `docs/phase-4-readiness-audit.md`;
+- `docs/phase-5-reassessment-audit.md`.
