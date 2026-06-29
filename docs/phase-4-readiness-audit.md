@@ -151,8 +151,7 @@ Required future gate:
 Phase 4 release-candidate evidence:
 
 1. shared release source: `4fee1090d9b787b0e78b9af8bff156215beee885`;
-2. next release tag: pending after product CI, expected
-   `world-infra-v0.1.0-rc.12`;
+2. release tag: `world-infra-v0.1.0-rc.12`;
 3. Chairman delivery-core adoption commit:
    `4771761513b74c9c900c639210c00d08cfd8f014`;
 4. Airline delivery-core/notification-core adoption commit:
