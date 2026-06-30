@@ -254,7 +254,7 @@ impl InProcessFixedWindow {
 
     /// Remove buckets whose windows ended before `now`.
     pub fn cleanup(&self, now: SystemTime, older_than: Duration) -> Result<usize, RateLimitError> {
-        let cutoff = unix_millis(now).saturating_sub(older_than.as_millis());
+        let cutoff = unix_millis(now).saturating_sub(duration_millis_ceil(older_than));
         let mut buckets = self
             .buckets
             .lock()
@@ -284,7 +284,13 @@ fn unix_millis(now: SystemTime) -> u128 {
 }
 
 fn window_millis(window: Duration) -> u128 {
-    window.as_millis().max(1)
+    duration_millis_ceil(window).max(1)
+}
+
+fn duration_millis_ceil(duration: Duration) -> u128 {
+    duration
+        .as_millis()
+        .saturating_add(u128::from(duration.subsec_nanos() % 1_000_000 != 0))
 }
 
 fn duration_from_millis(millis: u128) -> Duration {
@@ -476,6 +482,34 @@ mod tests {
         let second = backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap();
         assert!(!second.allowed);
         assert_eq!(second.retry_after, Some(Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn fractional_millisecond_window_rounds_up() {
+        let backend = InProcessFixedWindow::new();
+        let ns = Namespace::new("app").unwrap();
+        let key = RateLimitKey::new("anonymous").unwrap();
+        let limit = LimitSpec::Fixed {
+            count: NonZeroU32::new(1).unwrap(),
+            window: Duration::from_micros(1500),
+        };
+
+        assert!(backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap().allowed);
+        let at_one_millisecond = backend
+            .check(&ns, &key, limit, UNIX_EPOCH + Duration::from_millis(1))
+            .unwrap();
+        assert!(!at_one_millisecond.allowed);
+        assert_eq!(
+            at_one_millisecond.retry_after,
+            Some(Duration::from_millis(1))
+        );
+
+        assert!(
+            backend
+                .check(&ns, &key, limit, UNIX_EPOCH + Duration::from_millis(2))
+                .unwrap()
+                .allowed
+        );
     }
 
     #[test]

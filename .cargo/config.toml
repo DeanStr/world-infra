@@ -3,3 +3,5 @@
 # any shared crates exist on crates.io. This patch is workspace-local and is not
 # included in packaged crate manifests.
 world-identity-core = { path = "crates/world-identity-core" }
+delivery-core = { path = "crates/delivery-core" }
+idempotency-core = { path = "crates/idempotency-core" }
