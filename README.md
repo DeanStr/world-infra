@@ -24,6 +24,18 @@ The first extraction wave covers:
   vocabulary;
 - optional Testcontainers image wrappers for product integration tests.
 
+The post-plan product-hardening additions cover:
+
+- JSON/API contract-test helpers;
+- static web runtime-config and security-header checks;
+- scoped SQL review linting;
+- operator dead-letter and repair report vocabulary;
+- upload key, content-type, size, and completion-state primitives;
+- small auth claim/session/origin primitives;
+- provider-neutral billing risk and chargeback evidence helpers;
+- notification lifecycle, recurrence, delivery-version, and broadcast claim
+  helpers.
+
 Product adapters remain in product repositories. Shared crates expose typed
 library errors and product-neutral examples; products map those errors to their
 own API responses, logs, migrations, and operator workflows.

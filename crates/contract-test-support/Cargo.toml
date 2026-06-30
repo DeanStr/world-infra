@@ -1,0 +1,15 @@
+[package]
+name = "contract-test-support"
+description = "Product-neutral helpers for API, event, and schema contract tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

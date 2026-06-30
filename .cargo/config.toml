@@ -5,3 +5,4 @@
 world-identity-core = { path = "crates/world-identity-core" }
 delivery-core = { path = "crates/delivery-core" }
 idempotency-core = { path = "crates/idempotency-core" }
+notification-core = { path = "crates/notification-core" }
