@@ -84,6 +84,21 @@ impl IdempotencyNamespace {
     }
 }
 
+/// Runtime key encoding strategy for volatile idempotency stores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum IdempotencyKeyFormat {
+    /// Length-prefix namespace and key parts to avoid ambiguous concatenation.
+    #[default]
+    LengthPrefixed,
+    /// Preserve the common legacy shape `namespace:key`, or raw `key` without
+    /// a namespace.
+    ///
+    /// Use this only when adapting an existing product that already has live
+    /// volatile keys in this format. New adopters should prefer
+    /// [`IdempotencyKeyFormat::LengthPrefixed`].
+    NamespacePrefix,
+}
+
 /// Runtime idempotency error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdempotencyRuntimeError {
@@ -141,16 +156,21 @@ fn ttl_secs_ceil(ttl: Duration) -> u64 {
 fn namespaced_key(
     namespace: Option<&IdempotencyNamespace>,
     key: &str,
+    key_format: IdempotencyKeyFormat,
 ) -> Result<String, IdempotencyRuntimeError> {
     let key = validate_part(key)?;
-    Ok(match namespace {
-        Some(namespace) => format!(
+    Ok(match (key_format, namespace) {
+        (IdempotencyKeyFormat::LengthPrefixed, Some(namespace)) => format!(
             "idem:{}:{}:{}:{key}",
             namespace.as_str().len(),
             namespace.as_str(),
             key.len()
         ),
-        None => format!("idem:0::{}:{key}", key.len()),
+        (IdempotencyKeyFormat::LengthPrefixed, None) => format!("idem:0::{}:{key}", key.len()),
+        (IdempotencyKeyFormat::NamespacePrefix, Some(namespace)) => {
+            format!("{}:{key}", namespace.as_str())
+        }
+        (IdempotencyKeyFormat::NamespacePrefix, None) => key.to_owned(),
     })
 }
 
@@ -158,6 +178,7 @@ fn namespaced_key(
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryIdempotencyStore {
     namespace: Option<IdempotencyNamespace>,
+    key_format: IdempotencyKeyFormat,
     state: Arc<Mutex<InMemoryState>>,
 }
 
@@ -173,14 +194,28 @@ impl InMemoryIdempotencyStore {
     pub fn with_namespace(namespace: IdempotencyNamespace) -> Self {
         Self {
             namespace: Some(namespace),
+            key_format: IdempotencyKeyFormat::default(),
             state: Arc::new(Mutex::new(InMemoryState::default())),
         }
+    }
+
+    /// Return a copy with a key format.
+    #[must_use]
+    pub fn with_key_format(mut self, key_format: IdempotencyKeyFormat) -> Self {
+        self.key_format = key_format;
+        self
     }
 
     /// Return the configured namespace.
     #[must_use]
     pub fn namespace(&self) -> Option<&IdempotencyNamespace> {
         self.namespace.as_ref()
+    }
+
+    /// Return the configured key format.
+    #[must_use]
+    pub const fn key_format(&self) -> IdempotencyKeyFormat {
+        self.key_format
     }
 
     /// Set a marker once.
@@ -193,7 +228,7 @@ impl InMemoryIdempotencyStore {
         key: &str,
         ttl: Duration,
     ) -> Result<bool, IdempotencyRuntimeError> {
-        let key = namespaced_key(self.namespace.as_ref(), key)?;
+        let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let now = std::time::Instant::now();
         let expires_at = now + ttl_duration(ttl);
         let mut state = self
@@ -232,7 +267,7 @@ impl InMemoryIdempotencyStore {
         key: &str,
         ttl: Duration,
     ) -> Result<WorkClaim, IdempotencyRuntimeError> {
-        let key = namespaced_key(self.namespace.as_ref(), key)?;
+        let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let now = std::time::Instant::now();
         let expires_at = now + ttl_duration(ttl);
         let mut state = self
@@ -270,7 +305,7 @@ impl InMemoryIdempotencyStore {
         key: &str,
         ttl: Duration,
     ) -> Result<(), IdempotencyRuntimeError> {
-        let key = namespaced_key(self.namespace.as_ref(), key)?;
+        let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let expires_at = std::time::Instant::now() + ttl_duration(ttl);
         let mut state = self
             .state
@@ -293,7 +328,7 @@ impl InMemoryIdempotencyStore {
     ///
     /// Returns [`IdempotencyRuntimeError`] for invalid keys or lock failures.
     pub async fn delete(&self, key: &str) -> Result<(), IdempotencyRuntimeError> {
-        let key = namespaced_key(self.namespace.as_ref(), key)?;
+        let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let mut state = self
             .state
             .lock()
@@ -308,7 +343,7 @@ impl InMemoryIdempotencyStore {
     ///
     /// Returns [`IdempotencyRuntimeError`] for invalid keys or lock failures.
     pub async fn exists(&self, key: &str) -> Result<bool, IdempotencyRuntimeError> {
-        let key = namespaced_key(self.namespace.as_ref(), key)?;
+        let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let now = std::time::Instant::now();
         let mut state = self
             .state
@@ -328,6 +363,7 @@ impl InMemoryIdempotencyStore {
 pub struct RedisIdempotencyStore {
     client: redis::Client,
     namespace: Option<IdempotencyNamespace>,
+    key_format: IdempotencyKeyFormat,
     command_timeout: Duration,
     connection: Arc<Mutex<Option<redis::aio::MultiplexedConnection>>>,
 }
@@ -337,6 +373,7 @@ impl fmt::Debug for RedisIdempotencyStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisIdempotencyStore")
             .field("namespace", &self.namespace)
+            .field("key_format", &self.key_format)
             .field("command_timeout", &self.command_timeout)
             .finish_non_exhaustive()
     }
@@ -350,6 +387,7 @@ impl RedisIdempotencyStore {
         Self {
             client,
             namespace: None,
+            key_format: IdempotencyKeyFormat::default(),
             command_timeout: command_timeout.max(Duration::from_millis(1)),
             connection: Arc::new(Mutex::new(None)),
         }
@@ -365,6 +403,13 @@ impl RedisIdempotencyStore {
     #[must_use]
     pub fn with_namespace(mut self, namespace: IdempotencyNamespace) -> Self {
         self.namespace = Some(namespace);
+        self
+    }
+
+    /// Return a copy with a key format.
+    #[must_use]
+    pub fn with_key_format(mut self, key_format: IdempotencyKeyFormat) -> Self {
+        self.key_format = key_format;
         self
     }
 
@@ -401,7 +446,7 @@ impl RedisIdempotencyStore {
     }
 
     fn redis_key(&self, key: &str) -> Result<String, IdempotencyRuntimeError> {
-        namespaced_key(self.namespace.as_ref(), key)
+        namespaced_key(self.namespace.as_ref(), key, self.key_format)
     }
 
     /// Ping Redis.
@@ -703,12 +748,45 @@ mod tests {
         let first_namespace = IdempotencyNamespace::new("a").unwrap();
         let second_namespace = IdempotencyNamespace::new("a:b").unwrap();
         assert_ne!(
-            namespaced_key(Some(&first_namespace), "b:c").unwrap(),
-            namespaced_key(Some(&second_namespace), "c").unwrap()
+            namespaced_key(
+                Some(&first_namespace),
+                "b:c",
+                IdempotencyKeyFormat::LengthPrefixed
+            )
+            .unwrap(),
+            namespaced_key(
+                Some(&second_namespace),
+                "c",
+                IdempotencyKeyFormat::LengthPrefixed
+            )
+            .unwrap()
         );
         assert_ne!(
-            namespaced_key(Some(&first_namespace), "key").unwrap(),
-            namespaced_key(None, "a:key").unwrap()
+            namespaced_key(
+                Some(&first_namespace),
+                "key",
+                IdempotencyKeyFormat::LengthPrefixed
+            )
+            .unwrap(),
+            namespaced_key(None, "a:key", IdempotencyKeyFormat::LengthPrefixed).unwrap()
+        );
+    }
+
+    #[test]
+    fn namespace_prefix_key_format_preserves_legacy_shape() {
+        let namespace = IdempotencyNamespace::new("airline").unwrap();
+        assert_eq!(
+            namespaced_key(
+                Some(&namespace),
+                "evt:1",
+                IdempotencyKeyFormat::NamespacePrefix
+            )
+            .unwrap(),
+            "airline:evt:1"
+        );
+        assert_eq!(
+            namespaced_key(None, "evt:1", IdempotencyKeyFormat::NamespacePrefix).unwrap(),
+            "evt:1"
         );
     }
 
@@ -798,7 +876,12 @@ mod tests {
             .get_multiplexed_async_connection()
             .await
             .expect("direct redis connection should succeed");
-        let ttl_key = namespaced_key(Some(&namespace), "ttl").expect("ttl key should be valid");
+        let ttl_key = namespaced_key(
+            Some(&namespace),
+            "ttl",
+            IdempotencyKeyFormat::LengthPrefixed,
+        )
+        .expect("ttl key should be valid");
         let ttl: i64 = redis::cmd("TTL")
             .arg(&ttl_key)
             .query_async(&mut connection)
@@ -806,8 +889,12 @@ mod tests {
             .expect("ttl should query");
         assert!((0..=1).contains(&ttl), "expected short ttl, got {ttl}");
 
-        let unsupported_key =
-            namespaced_key(Some(&namespace), "unsupported").expect("key should be valid");
+        let unsupported_key = namespaced_key(
+            Some(&namespace),
+            "unsupported",
+            IdempotencyKeyFormat::LengthPrefixed,
+        )
+        .expect("key should be valid");
         redis::cmd("SET")
             .arg(&unsupported_key)
             .arg("surprise")
