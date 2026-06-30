@@ -233,14 +233,31 @@ pub fn subject_key(
     if subject.is_empty() {
         return Err(RateLimitError::InvalidKey);
     }
-    let raw = format!("{prefix}:{label}:{subject}");
-    match RateLimitKey::new(&raw) {
-        Ok(key) => Ok(key),
-        Err(_) => {
-            let digest = sha2::Sha256::digest(subject.as_bytes());
-            RateLimitKey::new(format!("{prefix}:{label}:sha256:{digest:x}"))
+    if validate_key_part(subject).is_ok() {
+        let raw = length_prefixed_subject_key(prefix, label, "raw", subject);
+        if let Ok(key) = RateLimitKey::new(&raw) {
+            return Ok(key);
         }
     }
+
+    let digest = format!("{:x}", sha2::Sha256::digest(subject.as_bytes()));
+    RateLimitKey::new(length_prefixed_subject_key(
+        prefix, label, "sha256", &digest,
+    ))
+}
+
+fn length_prefixed_subject_key(
+    prefix: &str,
+    label: &str,
+    subject_kind: &str,
+    subject: &str,
+) -> String {
+    format!(
+        "subject:v2:p{}:{prefix}:l{}:{label}:{subject_kind}:s{}:{subject}",
+        prefix.len(),
+        label.len(),
+        subject.len()
+    )
 }
 
 /// Product-neutral limit catalog keyed by product-owned labels.
@@ -897,11 +914,29 @@ mod tests {
     #[test]
     fn subject_key_hashes_unsafe_subjects() {
         let direct = subject_key("ip", "auth", "203.0.113.1").unwrap();
-        assert_eq!(direct.as_str(), "ip:auth:203.0.113.1");
+        assert_eq!(
+            direct.as_str(),
+            "subject:v2:p2:ip:l4:auth:raw:s11:203.0.113.1"
+        );
         let hashed = subject_key("ip", "auth", "user@example.com").unwrap();
-        assert!(hashed.as_str().starts_with("ip:auth:sha256:"));
-        assert_ne!(hashed.as_str(), "ip:auth:user@example.com");
+        assert!(hashed
+            .as_str()
+            .starts_with("subject:v2:p2:ip:l4:auth:sha256:s64:"));
+        assert_ne!(
+            hashed.as_str(),
+            "subject:v2:p2:ip:l4:auth:raw:s16:user@example.com"
+        );
         assert!(subject_key("ip", "auth", " ").is_err());
+    }
+
+    #[test]
+    fn subject_key_disambiguates_colon_separated_parts() {
+        let first = subject_key("ip", "auth:a", "b").unwrap();
+        let second = subject_key("ip", "auth", "a:b").unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first.as_str(), "subject:v2:p2:ip:l6:auth:a:raw:s1:b");
+        assert_eq!(second.as_str(), "subject:v2:p2:ip:l4:auth:raw:s3:a:b");
     }
 
     #[cfg(feature = "json")]
