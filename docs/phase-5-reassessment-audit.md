@@ -202,6 +202,10 @@ Deferred:
   out narrow helpers only after repeated code appears in both products with the
   same failure semantics.
 
+Post-plan update: the idempotency backend deferral was later superseded by
+`docs/rfcs/idempotency-runtime-core.md`, which approves a narrow volatile
+runtime claim-store crate and keeps durable SQL/request idempotency local.
+
 Completed shared implementation:
 
 - `world-test-containers` provides optional `postgres` and `valkey` features.

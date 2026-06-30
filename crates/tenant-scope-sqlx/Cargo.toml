@@ -11,9 +11,11 @@ readme.workspace = true
 [features]
 default = ["sqlx-postgres"]
 sqlx-postgres = ["dep:sqlx"]
+uuid = ["dep:uuid"]
 
 [dependencies]
 sqlx = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [lints]
 workspace = true

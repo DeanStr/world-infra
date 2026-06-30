@@ -1,7 +1,8 @@
 //! Transaction-bound SQLx `SET LOCAL` helpers.
 //!
-//! This crate does not provide pool wrappers, transaction factories, RLS policy,
-//! or product-specific setting names.
+//! This crate does not provide RLS policy or product-specific setting names.
+//! Optional transaction helpers only begin a transaction and apply
+//! product-provided settings.
 
 use std::{error::Error, fmt};
 
@@ -91,6 +92,18 @@ impl ScopeValue for String {
     }
 }
 
+impl ScopeValue for i32 {
+    fn to_scope_value(&self) -> Result<String, TenantScopeError> {
+        Ok(self.to_string())
+    }
+}
+
+impl ScopeValue for u32 {
+    fn to_scope_value(&self) -> Result<String, TenantScopeError> {
+        Ok(self.to_string())
+    }
+}
+
 impl ScopeValue for i64 {
     fn to_scope_value(&self) -> Result<String, TenantScopeError> {
         Ok(self.to_string())
@@ -100,6 +113,58 @@ impl ScopeValue for i64 {
 impl ScopeValue for u64 {
     fn to_scope_value(&self) -> Result<String, TenantScopeError> {
         Ok(self.to_string())
+    }
+}
+
+#[cfg(feature = "uuid")]
+impl ScopeValue for uuid::Uuid {
+    fn to_scope_value(&self) -> Result<String, TenantScopeError> {
+        Ok(self.to_string())
+    }
+}
+
+/// Product-provided setting assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeAssignment {
+    name: SettingName,
+    value: String,
+}
+
+impl ScopeAssignment {
+    /// Construct a setting assignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TenantScopeError`] if the value cannot be serialized.
+    pub fn new(name: SettingName, value: impl ScopeValue) -> Result<Self, TenantScopeError> {
+        Ok(Self {
+            name,
+            value: value.to_scope_value()?,
+        })
+    }
+
+    /// Validate a setting name and construct an assignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TenantScopeError`] if the setting name or value is invalid.
+    pub fn from_parts(
+        name: impl AsRef<str>,
+        value: impl ScopeValue,
+    ) -> Result<Self, TenantScopeError> {
+        Self::new(SettingName::new(name)?, value)
+    }
+
+    /// Access the setting name.
+    #[must_use]
+    pub fn name(&self) -> &SettingName {
+        &self.name
+    }
+
+    /// Access the serialized setting value.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        &self.value
     }
 }
 
@@ -154,6 +219,163 @@ pub async fn set_local<'c>(
     Ok(())
 }
 
+/// Set a prebuilt assignment inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError::Sql`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_assignment<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    assignment: &ScopeAssignment,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, assignment.name(), assignment.value()).await
+}
+
+/// Set many local PostgreSQL settings inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError::Sql`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_many<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    assignments: &[ScopeAssignment],
+) -> Result<(), TenantScopeError> {
+    for assignment in assignments {
+        set_local_assignment(tx, assignment).await?;
+    }
+    Ok(())
+}
+
+/// Set an `i64` local setting inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_i64<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    name: &SettingName,
+    value: i64,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, name, value).await
+}
+
+/// Set an `i32` local setting inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_i32<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    name: &SettingName,
+    value: i32,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, name, value).await
+}
+
+/// Set a `u64` local setting inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_u64<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    name: &SettingName,
+    value: u64,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, name, value).await
+}
+
+/// Set a `u32` local setting inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_u32<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    name: &SettingName,
+    value: u32,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, name, value).await
+}
+
+/// Set a string local setting inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError`] when SQLx execution fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn set_local_str<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    name: &SettingName,
+    value: &str,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, name, value).await
+}
+
+/// Set a UUID local setting inside an existing transaction.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError`] when SQLx execution fails.
+#[cfg(all(feature = "sqlx-postgres", feature = "uuid"))]
+pub async fn set_local_uuid<'c>(
+    tx: &mut sqlx::Transaction<'c, sqlx::Postgres>,
+    name: &SettingName,
+    value: uuid::Uuid,
+) -> Result<(), TenantScopeError> {
+    set_local(tx, name, value).await
+}
+
+/// Begin a transaction and apply product-provided local settings.
+///
+/// Product adapters own authorization and the setting names passed here.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError::Sql`] when beginning the transaction or applying
+/// scope fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn begin_scoped_tx<'p>(
+    pool: &'p sqlx::Pool<sqlx::Postgres>,
+    assignments: &[ScopeAssignment],
+) -> Result<sqlx::Transaction<'p, sqlx::Postgres>, TenantScopeError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| TenantScopeError::Sql(error.to_string()))?;
+    set_local_many(&mut tx, assignments).await?;
+    Ok(tx)
+}
+
+/// Begin a read-only repeatable-read transaction and apply local settings.
+///
+/// # Errors
+///
+/// Returns [`TenantScopeError::Sql`] when beginning or configuring the
+/// transaction fails.
+#[cfg(feature = "sqlx-postgres")]
+pub async fn begin_readonly_repeatable_scoped_tx<'p>(
+    pool: &'p sqlx::Pool<sqlx::Postgres>,
+    assignments: &[ScopeAssignment],
+) -> Result<sqlx::Transaction<'p, sqlx::Postgres>, TenantScopeError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| TenantScopeError::Sql(error.to_string()))?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| TenantScopeError::Sql(error.to_string()))?;
+    set_local_many(&mut tx, assignments).await?;
+    Ok(tx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +403,18 @@ mod tests {
             r"SET LOCAL app.world_id = E'world\\'';select pg_sleep(10);--'"
         );
         assert!(quote_setting_value("bad\0value").is_err());
+    }
+
+    #[test]
+    fn scope_assignments_validate_name_and_value() {
+        let assignment = ScopeAssignment::from_parts("app.world_id", 7_i64).unwrap();
+        assert_eq!(assignment.name().as_str(), "app.world_id");
+        assert_eq!(assignment.value(), "7");
+        let assignment = ScopeAssignment::from_parts("app.world_id", 7_i32).unwrap();
+        assert_eq!(assignment.value(), "7");
+        let assignment = ScopeAssignment::from_parts("app.airline_count", 3_u32).unwrap();
+        assert_eq!(assignment.value(), "3");
+        assert!(ScopeAssignment::from_parts("app.world_id;drop", 7_i64).is_err());
+        assert!(ScopeAssignment::from_parts("app.world_id", "bad\0value").is_err());
     }
 }

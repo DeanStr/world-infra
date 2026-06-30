@@ -5,9 +5,12 @@ use std::{
     error::Error,
     fmt,
     num::NonZeroU32,
+    str::FromStr,
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use sha2::Digest as _;
 
 /// Product-neutral limit specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,11 +27,148 @@ pub enum LimitSpec {
 }
 
 impl LimitSpec {
+    /// Construct a fixed limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LimitParseError::InvalidCount`] for a zero count or
+    /// [`LimitParseError::InvalidWindow`] for a zero window.
+    pub fn fixed(count: u32, window: Duration) -> Result<Self, LimitParseError> {
+        if window.is_zero() {
+            return Err(LimitParseError::InvalidWindow);
+        }
+        Ok(Self::Fixed {
+            count: NonZeroU32::new(count).ok_or(LimitParseError::InvalidCount)?,
+            window,
+        })
+    }
+
     /// Return true when this limit is unlimited.
     #[must_use]
     pub const fn is_unlimited(self) -> bool {
         matches!(self, Self::Unlimited)
     }
+}
+
+impl FromStr for LimitSpec {
+    type Err = LimitParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_limit_spec(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowParseMode {
+    PermissiveBareSeconds,
+    StrictSuffix,
+}
+
+/// Error returned when parsing a limit specification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LimitParseError {
+    /// Input was blank.
+    Empty,
+    /// Count was missing, malformed, or zero.
+    InvalidCount,
+    /// Window was missing or malformed.
+    InvalidWindow,
+}
+
+impl fmt::Display for LimitParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("limit spec is empty"),
+            Self::InvalidCount => f.write_str("limit count is invalid"),
+            Self::InvalidWindow => f.write_str("limit window is invalid"),
+        }
+    }
+}
+
+impl Error for LimitParseError {}
+
+/// Parse a limit specification such as `10/min`, `100/60s`, or `unlimited`.
+///
+/// # Errors
+///
+/// Returns [`LimitParseError`] for malformed specifications.
+pub fn parse_limit_spec(value: impl AsRef<str>) -> Result<LimitSpec, LimitParseError> {
+    parse_limit_spec_with_mode(value, WindowParseMode::PermissiveBareSeconds)
+}
+
+/// Parse a limit specification without accepting bare numeric windows.
+///
+/// This is useful for externally supplied configuration where `10/60` should
+/// not silently mean `10/60s`.
+///
+/// # Errors
+///
+/// Returns [`LimitParseError`] for malformed specifications.
+pub fn parse_limit_spec_strict(value: impl AsRef<str>) -> Result<LimitSpec, LimitParseError> {
+    parse_limit_spec_with_mode(value, WindowParseMode::StrictSuffix)
+}
+
+fn parse_limit_spec_with_mode(
+    value: impl AsRef<str>,
+    mode: WindowParseMode,
+) -> Result<LimitSpec, LimitParseError> {
+    let value = value.as_ref().trim();
+    if value.is_empty() {
+        return Err(LimitParseError::Empty);
+    }
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "unlimited" | "none" | "off"
+    ) {
+        return Ok(LimitSpec::Unlimited);
+    }
+    let (count, window) = value
+        .split_once('/')
+        .ok_or(LimitParseError::InvalidWindow)?;
+    let count = count
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| LimitParseError::InvalidCount)?;
+    let count = NonZeroU32::new(count).ok_or(LimitParseError::InvalidCount)?;
+    Ok(LimitSpec::Fixed {
+        count,
+        window: parse_window(window, mode)?,
+    })
+}
+
+fn parse_window(value: &str, mode: WindowParseMode) -> Result<Duration, LimitParseError> {
+    let value = value.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "s" | "sec" | "second" | "seconds" => return Ok(Duration::from_secs(1)),
+        "m" | "min" | "minute" | "minutes" => return Ok(Duration::from_secs(60)),
+        "h" | "hr" | "hour" | "hours" => return Ok(Duration::from_secs(3600)),
+        "d" | "day" | "days" => return Ok(Duration::from_secs(86_400)),
+        _ => {}
+    }
+    let (number, scale) = if let Some(number) = value.strip_suffix("ms") {
+        (number, Duration::from_millis(1))
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, Duration::from_secs(1))
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, Duration::from_secs(60))
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, Duration::from_secs(3600))
+    } else if let Some(number) = value.strip_suffix('d') {
+        (number, Duration::from_secs(86_400))
+    } else {
+        if mode == WindowParseMode::StrictSuffix {
+            return Err(LimitParseError::InvalidWindow);
+        }
+        (value.as_str(), Duration::from_secs(1))
+    };
+    let units = number
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| LimitParseError::InvalidWindow)?;
+    if units == 0 {
+        return Err(LimitParseError::InvalidWindow);
+    }
+    Ok(scale.saturating_mul(u32::try_from(units).unwrap_or(u32::MAX)))
 }
 
 /// Stable namespace wrapper.
@@ -71,6 +211,209 @@ impl RateLimitKey {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Build a stable key from a prefix, label, and subject.
+///
+/// If the subject contains characters that are unsafe for shared rate-limit
+/// keys, it is replaced with a SHA-256 digest while preserving prefix and label.
+///
+/// # Errors
+///
+/// Returns [`RateLimitError::InvalidKey`] if prefix, label, or subject are
+/// blank or if prefix/label are otherwise unsafe.
+pub fn subject_key(
+    prefix: &str,
+    label: &str,
+    subject: &str,
+) -> Result<RateLimitKey, RateLimitError> {
+    let prefix = validate_key_part(prefix)?;
+    let label = validate_key_part(label)?;
+    let subject = subject.trim();
+    if subject.is_empty() {
+        return Err(RateLimitError::InvalidKey);
+    }
+    let raw = format!("{prefix}:{label}:{subject}");
+    match RateLimitKey::new(&raw) {
+        Ok(key) => Ok(key),
+        Err(_) => {
+            let digest = sha2::Sha256::digest(subject.as_bytes());
+            RateLimitKey::new(format!("{prefix}:{label}:sha256:{digest:x}"))
+        }
+    }
+}
+
+/// Product-neutral limit catalog keyed by product-owned labels.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LimitCatalog {
+    limits: HashMap<String, LimitSpec>,
+}
+
+impl LimitCatalog {
+    /// Construct an empty catalog.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Construct a catalog from label/spec pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RateLimitError::InvalidKey`] if a label is unsafe.
+    pub fn from_pairs<I, K>(pairs: I) -> Result<Self, RateLimitError>
+    where
+        I: IntoIterator<Item = (K, LimitSpec)>,
+        K: Into<String>,
+    {
+        let mut catalog = Self::new();
+        for (label, spec) in pairs {
+            catalog.insert(label, spec)?;
+        }
+        Ok(catalog)
+    }
+
+    /// Insert or replace a limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RateLimitError::InvalidKey`] if the label is unsafe.
+    pub fn insert(
+        &mut self,
+        label: impl Into<String>,
+        spec: LimitSpec,
+    ) -> Result<Option<LimitSpec>, RateLimitError> {
+        let label = label.into();
+        let label = validate_key_part(&label)?.to_owned();
+        Ok(self.limits.insert(label, spec))
+    }
+
+    /// Return a limit by label.
+    #[must_use]
+    pub fn get(&self, label: &str) -> Option<LimitSpec> {
+        let label = validate_key_part(label).ok()?;
+        self.limits.get(label).copied()
+    }
+
+    /// Merge another catalog, replacing existing labels.
+    pub fn merge(&mut self, other: LimitCatalog) {
+        self.limits.extend(other.limits);
+    }
+
+    /// Iterate over catalog entries.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, LimitSpec)> {
+        self.limits
+            .iter()
+            .map(|(label, spec)| (label.as_str(), *spec))
+    }
+
+    /// Number of labels in the catalog.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.limits.len()
+    }
+
+    /// Return whether the catalog is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.limits.is_empty()
+    }
+}
+
+/// Error returned when parsing a limit catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LimitCatalogError {
+    /// JSON was malformed.
+    InvalidJson(String),
+    /// Label was unsafe.
+    InvalidLabel(String),
+    /// Limit spec was malformed.
+    InvalidSpec(String),
+}
+
+impl fmt::Display for LimitCatalogError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidJson(error) => write!(f, "limit catalog JSON is invalid: {error}"),
+            Self::InvalidLabel(label) => write!(f, "limit label is invalid: {label}"),
+            Self::InvalidSpec(label) => write!(f, "limit spec is invalid for label {label}"),
+        }
+    }
+}
+
+impl Error for LimitCatalogError {}
+
+/// Parse JSON rate-limit overrides into a catalog.
+///
+/// Accepted values are strings such as `"10/min"`, arrays like `[10, 60]`,
+/// or objects with `count` and `windowSecs`/`window_seconds` fields.
+///
+/// # Errors
+///
+/// Returns [`LimitCatalogError`] for malformed JSON or unsafe labels.
+#[cfg(feature = "json")]
+pub fn parse_limit_overrides_json(raw: &str) -> Result<LimitCatalog, LimitCatalogError> {
+    let value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|error| LimitCatalogError::InvalidJson(error.to_string()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| LimitCatalogError::InvalidJson("expected object".to_owned()))?;
+    let mut catalog = LimitCatalog::new();
+    for (label, value) in object {
+        let spec = limit_spec_from_json_value(label, value)?;
+        catalog
+            .insert(label.clone(), spec)
+            .map_err(|_| LimitCatalogError::InvalidLabel(label.clone()))?;
+    }
+    Ok(catalog)
+}
+
+#[cfg(feature = "json")]
+fn limit_spec_from_json_value(
+    label: &str,
+    value: &serde_json::Value,
+) -> Result<LimitSpec, LimitCatalogError> {
+    if let Some(value) = value.as_str() {
+        return parse_limit_spec_strict(value)
+            .map_err(|_| LimitCatalogError::InvalidSpec(label.to_owned()));
+    }
+    if let Some(values) = value.as_array() {
+        if values.len() != 2 {
+            return Err(LimitCatalogError::InvalidSpec(label.to_owned()));
+        }
+        let count = values[0]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| LimitCatalogError::InvalidSpec(label.to_owned()))?;
+        let window_secs = values[1]
+            .as_u64()
+            .ok_or_else(|| LimitCatalogError::InvalidSpec(label.to_owned()))?;
+        return LimitSpec::fixed(count, Duration::from_secs(window_secs))
+            .map_err(|_| LimitCatalogError::InvalidSpec(label.to_owned()));
+    }
+    if let Some(object) = value.as_object() {
+        if object
+            .get("unlimited")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(LimitSpec::Unlimited);
+        }
+        let count = object
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| LimitCatalogError::InvalidSpec(label.to_owned()))?;
+        let window_secs = object
+            .get("windowSecs")
+            .or_else(|| object.get("window_seconds"))
+            .or_else(|| object.get("window_secs"))
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| LimitCatalogError::InvalidSpec(label.to_owned()))?;
+        return LimitSpec::fixed(count, Duration::from_secs(window_secs))
+            .map_err(|_| LimitCatalogError::InvalidSpec(label.to_owned()));
+    }
+    Err(LimitCatalogError::InvalidSpec(label.to_owned()))
 }
 
 fn validate_key_part(value: &str) -> Result<&str, RateLimitError> {
@@ -378,6 +721,54 @@ pub mod redis_backend {
                 health: RateLimitHealth::Healthy,
             })
         }
+
+        /// Check and increment a Redis bucket with timeout enforcement.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`RateLimitError::Backend`] when the timeout elapses or the
+        /// Redis command fails.
+        pub async fn check_with_timeout<C>(
+            &self,
+            connection: &mut C,
+            key: &RateLimitKey,
+            limit: LimitSpec,
+            now: SystemTime,
+        ) -> Result<RateLimitDecision, RateLimitError>
+        where
+            C: redis::aio::ConnectionLike + Send,
+        {
+            tokio::time::timeout(
+                self.command_timeout,
+                self.check(connection, key, limit, now),
+            )
+            .await
+            .map_err(|_| RateLimitError::Backend("redis command timeout".to_owned()))?
+        }
+
+        /// Ping Redis with timeout enforcement.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`RateLimitError::Backend`] when the timeout elapses or the
+        /// Redis command fails.
+        pub async fn ping_with_timeout<C>(
+            &self,
+            connection: &mut C,
+        ) -> Result<RateLimitHealth, RateLimitError>
+        where
+            C: redis::aio::ConnectionLike + Send,
+        {
+            let result = tokio::time::timeout(
+                self.command_timeout,
+                redis::cmd("PING").query_async::<String>(connection),
+            )
+            .await
+            .map_err(|_| RateLimitError::Backend("redis ping timeout".to_owned()))?;
+            result
+                .map(|_| RateLimitHealth::Healthy)
+                .map_err(|error| RateLimitError::Backend(error.to_string()))
+        }
     }
 
     fn redis_bucket_key(namespace: &Namespace, key: &RateLimitKey, bucket: u128) -> String {
@@ -427,6 +818,118 @@ mod tests {
             .unwrap();
         assert!(decision.allowed);
         assert_eq!(decision.remaining, u32::MAX);
+    }
+
+    #[test]
+    fn parses_limit_specs() {
+        assert_eq!("unlimited".parse::<LimitSpec>(), Ok(LimitSpec::Unlimited));
+        assert_eq!(
+            "10/min".parse::<LimitSpec>(),
+            Ok(LimitSpec::Fixed {
+                count: NonZeroU32::new(10).unwrap(),
+                window: Duration::from_secs(60)
+            })
+        );
+        assert_eq!(
+            parse_limit_spec("5/250ms"),
+            Ok(LimitSpec::Fixed {
+                count: NonZeroU32::new(5).unwrap(),
+                window: Duration::from_millis(250)
+            })
+        );
+        assert_eq!(
+            parse_limit_spec("2/day"),
+            Ok(LimitSpec::Fixed {
+                count: NonZeroU32::new(2).unwrap(),
+                window: Duration::from_secs(86_400)
+            })
+        );
+        assert_eq!(
+            parse_limit_spec("2/7d"),
+            Ok(LimitSpec::Fixed {
+                count: NonZeroU32::new(2).unwrap(),
+                window: Duration::from_secs(604_800)
+            })
+        );
+        assert_eq!(
+            parse_limit_spec("10/60"),
+            Ok(LimitSpec::Fixed {
+                count: NonZeroU32::new(10).unwrap(),
+                window: Duration::from_secs(60)
+            })
+        );
+        assert!(parse_limit_spec_strict("10/60").is_err());
+        assert!(parse_limit_spec_strict("10/60s").is_ok());
+        assert!(parse_limit_spec("0/min").is_err());
+        assert!(LimitSpec::fixed(5, Duration::ZERO).is_err());
+    }
+
+    #[test]
+    fn catalog_validates_labels_and_looks_up_specs() {
+        let mut catalog = LimitCatalog::from_pairs([(
+            "auth_login",
+            LimitSpec::fixed(5, Duration::from_secs(60)).unwrap(),
+        )])
+        .unwrap();
+        assert_eq!(
+            catalog.get("auth_login"),
+            Some(LimitSpec::fixed(5, Duration::from_secs(60)).unwrap())
+        );
+        catalog
+            .insert(
+                " search ",
+                LimitSpec::fixed(30, Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            catalog.get("search"),
+            Some(LimitSpec::fixed(30, Duration::from_secs(60)).unwrap())
+        );
+        assert_eq!(
+            catalog.get(" search "),
+            Some(LimitSpec::fixed(30, Duration::from_secs(60)).unwrap())
+        );
+        assert!(catalog.iter().any(|(label, _)| label == "search"));
+        assert!(!catalog.iter().any(|(label, _)| label == " search "));
+        assert!(LimitCatalog::from_pairs([("bad label", LimitSpec::Unlimited)]).is_err());
+    }
+
+    #[test]
+    fn subject_key_hashes_unsafe_subjects() {
+        let direct = subject_key("ip", "auth", "203.0.113.1").unwrap();
+        assert_eq!(direct.as_str(), "ip:auth:203.0.113.1");
+        let hashed = subject_key("ip", "auth", "user@example.com").unwrap();
+        assert!(hashed.as_str().starts_with("ip:auth:sha256:"));
+        assert_ne!(hashed.as_str(), "ip:auth:user@example.com");
+        assert!(subject_key("ip", "auth", " ").is_err());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn parses_json_limit_overrides() {
+        let catalog = parse_limit_overrides_json(
+            r#"{
+                "auth_login": "5/min",
+                "search": [30, 60],
+                "internal": {"unlimited": true},
+                "write": {"count": 10, "windowSecs": 120}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            catalog.get("auth_login"),
+            Some(LimitSpec::fixed(5, Duration::from_secs(60)).unwrap())
+        );
+        assert_eq!(
+            catalog.get("search"),
+            Some(LimitSpec::fixed(30, Duration::from_secs(60)).unwrap())
+        );
+        assert_eq!(catalog.get("internal"), Some(LimitSpec::Unlimited));
+        assert_eq!(
+            catalog.get("write"),
+            Some(LimitSpec::fixed(10, Duration::from_secs(120)).unwrap())
+        );
+        assert!(parse_limit_overrides_json(r#"{"bad": "10/60"}"#).is_err());
     }
 
     #[test]

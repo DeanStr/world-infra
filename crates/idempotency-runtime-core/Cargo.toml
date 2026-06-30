@@ -1,6 +1,6 @@
 [package]
-name = "rate-limit-core"
-description = "Policy-free rate-limit backend mechanics."
+name = "idempotency-runtime-core"
+description = "Volatile idempotency claim stores for service-edge work."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,14 +10,14 @@ readme.workspace = true
 
 [features]
 default = []
-json = ["dep:serde_json"]
 redis = ["dep:redis", "dep:tokio"]
 
 [dependencies]
 redis = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
-sha2 = { workspace = true }
 tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

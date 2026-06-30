@@ -52,6 +52,17 @@ impl fmt::Display for EnvError {
 
 impl Error for EnvError {}
 
+/// Fallback behavior for malformed optional environment values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackPolicy {
+    /// Return the parse/validation error.
+    Strict,
+    /// Print a short warning to stderr and use the supplied default.
+    WarnToStderr,
+    /// Use the supplied default without warning.
+    SilentDefault,
+}
+
 /// Return a trimmed variable value if it exists and is not blank.
 pub fn optional_var(name: impl AsRef<str>) -> Option<String> {
     env::var(name.as_ref())
@@ -144,6 +155,83 @@ where
     Ok(parsed)
 }
 
+/// Parse an optional ordered value with fallback policy and a minimum bound.
+///
+/// Missing variables use `default`. Malformed or below-minimum present values
+/// follow `policy`. The returned fallback is never below `minimum`.
+///
+/// # Errors
+///
+/// Returns [`EnvError`] when `policy` is [`FallbackPolicy::Strict`] and a
+/// present value is malformed or below minimum.
+pub fn parse_or_default_with_min_policy<T>(
+    name: impl AsRef<str>,
+    default: T,
+    minimum: T,
+    policy: FallbackPolicy,
+) -> Result<T, EnvError>
+where
+    T: FromStr + Ord + Clone + fmt::Display,
+    T::Err: fmt::Display,
+{
+    let name = name.as_ref();
+    let fallback = if default < minimum {
+        minimum.clone()
+    } else {
+        default
+    };
+    let Some(value) = optional_var(name) else {
+        return Ok(fallback);
+    };
+    let parsed = match value.parse::<T>() {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return fallback_or_error(
+                name,
+                &EnvError::Invalid {
+                    name: name.to_owned(),
+                    value,
+                    message: error.to_string(),
+                },
+                fallback,
+                policy,
+            );
+        }
+    };
+    if parsed < minimum {
+        return fallback_or_error(
+            name,
+            &EnvError::BelowMinimum {
+                name: name.to_owned(),
+                value: parsed.to_string(),
+                minimum: minimum.to_string(),
+            },
+            fallback,
+            policy,
+        );
+    }
+    Ok(parsed)
+}
+
+fn fallback_or_error<T>(
+    name: &str,
+    error: &EnvError,
+    fallback: T,
+    policy: FallbackPolicy,
+) -> Result<T, EnvError>
+where
+    T: fmt::Display,
+{
+    match policy {
+        FallbackPolicy::Strict => Err(error.clone()),
+        FallbackPolicy::WarnToStderr => {
+            eprintln!("{name} is invalid; using default {fallback}");
+            Ok(fallback)
+        }
+        FallbackPolicy::SilentDefault => Ok(fallback),
+    }
+}
+
 /// Parse a value and reject it if it is below a minimum.
 ///
 /// # Errors
@@ -185,6 +273,19 @@ pub fn parse_strict_bool(name: impl AsRef<str>, value: impl AsRef<str>) -> Resul
     }
 }
 
+/// Parse a common boolean literal without allocating an error.
+///
+/// Accepted true values are `1`, `true`, `yes`, and `on`; accepted false
+/// values are `0`, `false`, `no`, and `off`, case-insensitive.
+#[must_use]
+pub fn parse_bool_literal(value: impl AsRef<str>) -> Option<bool> {
+    match value.as_ref().trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 /// Parse lenient booleans: `1/0`, `true/false`, `yes/no`, `on/off`.
 ///
 /// # Errors
@@ -192,16 +293,12 @@ pub fn parse_strict_bool(name: impl AsRef<str>, value: impl AsRef<str>) -> Resul
 /// Returns [`EnvError::Invalid`] for any other value.
 pub fn parse_lenient_bool(name: impl AsRef<str>, value: impl AsRef<str>) -> Result<bool, EnvError> {
     let name = name.as_ref();
-    let value = value.as_ref().trim();
-    match value.to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(EnvError::Invalid {
-            name: name.to_owned(),
-            value: value.to_owned(),
-            message: "expected one of 1/0, true/false, yes/no, on/off".to_owned(),
-        }),
-    }
+    let raw = value.as_ref();
+    parse_bool_literal(raw).ok_or_else(|| EnvError::Invalid {
+        name: name.to_owned(),
+        value: raw.trim().to_owned(),
+        message: "expected one of 1/0, true/false, yes/no, on/off".to_owned(),
+    })
 }
 
 /// Parse an optional boolean variable using lenient syntax.
@@ -297,6 +394,8 @@ mod tests {
         assert!(parse_strict_bool("FLAG", "1").is_err());
         assert!(parse_lenient_bool("FLAG", "yes").unwrap());
         assert!(!parse_lenient_bool("FLAG", "off").unwrap());
+        assert_eq!(parse_bool_literal(" ON "), Some(true));
+        assert_eq!(parse_bool_literal("maybe"), None);
     }
 
     #[test]
@@ -316,5 +415,26 @@ mod tests {
             parse_header_list(" X-Real-IP,Forwarded "),
             vec!["x-real-ip", "forwarded"]
         );
+    }
+
+    #[test]
+    fn fallback_policy_controls_invalid_optional_values() {
+        let key = "WORLD_ENV_FALLBACK_POLICY_TEST";
+        env::set_var(key, "bad");
+        assert!(
+            parse_or_default_with_min_policy::<u32>(key, 10, 1, FallbackPolicy::Strict).is_err()
+        );
+        assert_eq!(
+            parse_or_default_with_min_policy::<u32>(key, 10, 1, FallbackPolicy::SilentDefault)
+                .unwrap(),
+            10
+        );
+        env::set_var(key, "0");
+        assert_eq!(
+            parse_or_default_with_min_policy::<u32>(key, 10, 1, FallbackPolicy::SilentDefault)
+                .unwrap(),
+            10
+        );
+        env::remove_var(key);
     }
 }

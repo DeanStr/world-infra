@@ -13,6 +13,7 @@ The first extraction wave covers:
 - incarnation-aware world identity;
 - HTTP request parsing and edge-safety helpers;
 - idempotency key construction for new keys;
+- volatile idempotency runtime claim stores;
 - product-neutral world clock primitives;
 - rate-limit backend mechanics;
 - narrow transaction-bound SQLx scope helpers;

@@ -43,6 +43,23 @@ impl LeaseToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Construct a lease token from a UUID.
+    #[cfg(feature = "uuid")]
+    #[must_use]
+    pub fn from_uuid(value: uuid::Uuid) -> Self {
+        Self(value.to_string())
+    }
+
+    /// Parse this lease token as a UUID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeliveryError::InvalidLeaseToken`] if the token is not a UUID.
+    #[cfg(feature = "uuid")]
+    pub fn parse_uuid(&self) -> Result<uuid::Uuid, DeliveryError> {
+        self.0.parse().map_err(|_| DeliveryError::InvalidLeaseToken)
+    }
 }
 
 /// Product-neutral claimed delivery envelope.
@@ -113,6 +130,23 @@ pub struct BackoffPolicy {
     multiplier: u32,
 }
 
+/// Convert a completed-attempt count into the next one-based attempt number.
+#[must_use]
+pub const fn attempt_from_completed_count(completed_count: u32) -> u32 {
+    completed_count.saturating_add(1)
+}
+
+/// Convert a signed completed-attempt database field into the next one-based
+/// attempt number.
+#[must_use]
+pub const fn attempt_from_completed_count_i32(completed_count: i32) -> Option<u32> {
+    if completed_count < 0 {
+        None
+    } else {
+        Some((completed_count as u32).saturating_add(1))
+    }
+}
+
 impl BackoffPolicy {
     /// Construct a backoff policy.
     ///
@@ -144,6 +178,73 @@ impl BackoffPolicy {
         }
         delay
     }
+
+    /// Calculate delay for the next attempt after a completed-attempt count.
+    #[must_use]
+    pub fn delay_for_completed_attempts(self, completed_count: u32) -> Duration {
+        self.delay_for_attempt(attempt_from_completed_count(completed_count))
+    }
+
+    /// Calculate delay from a signed completed-attempt database field.
+    #[must_use]
+    pub fn delay_for_completed_attempts_i32(self, completed_count: i32) -> Option<Duration> {
+        attempt_from_completed_count_i32(completed_count)
+            .map(|attempt| self.delay_for_attempt(attempt))
+    }
+}
+
+/// Retry schedule wrapper for products that prefer completed-attempt semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetrySchedule {
+    policy: BackoffPolicy,
+}
+
+impl RetrySchedule {
+    /// Construct a retry schedule from a backoff policy.
+    #[must_use]
+    pub const fn new(policy: BackoffPolicy) -> Self {
+        Self { policy }
+    }
+
+    /// Access the underlying policy.
+    #[must_use]
+    pub const fn policy(self) -> BackoffPolicy {
+        self.policy
+    }
+
+    /// Calculate delay for a one-based attempt number.
+    #[must_use]
+    pub fn delay_for_attempt(self, attempt: u32) -> Duration {
+        self.policy.delay_for_attempt(attempt)
+    }
+
+    /// Calculate delay for the next attempt after completed attempts.
+    #[must_use]
+    pub fn delay_for_completed_attempts(self, completed_count: u32) -> Duration {
+        self.policy.delay_for_completed_attempts(completed_count)
+    }
+
+    /// Calculate delay from a signed completed-attempt database field.
+    #[must_use]
+    pub fn delay_for_completed_attempts_i32(self, completed_count: i32) -> Option<Duration> {
+        self.policy
+            .delay_for_completed_attempts_i32(completed_count)
+    }
+}
+
+/// Calculate delay for the next attempt after completed attempts.
+#[must_use]
+pub fn delay_for_completed_attempts(policy: BackoffPolicy, completed_count: u32) -> Duration {
+    policy.delay_for_completed_attempts(completed_count)
+}
+
+/// Calculate delay from a signed completed-attempt database field.
+#[must_use]
+pub fn delay_for_completed_attempts_i32(
+    policy: BackoffPolicy,
+    completed_count: i32,
+) -> Option<Duration> {
+    policy.delay_for_completed_attempts_i32(completed_count)
 }
 
 /// Worker run report.
@@ -223,6 +324,10 @@ mod tests {
         assert_eq!(policy.delay_for_attempt(1), Duration::from_secs(2));
         assert_eq!(policy.delay_for_attempt(2), Duration::from_secs(6));
         assert_eq!(policy.delay_for_attempt(3), Duration::from_secs(10));
+        assert_eq!(
+            delay_for_completed_attempts(policy, 2),
+            Duration::from_secs(10)
+        );
     }
 
     #[test]
@@ -246,5 +351,14 @@ mod tests {
         report.record(&DeliveryAttemptOutcome::AmbiguousAfterSideEffect);
         assert_eq!(report.delivered, 1);
         assert_eq!(report.ambiguous_after_side_effect, 1);
+    }
+
+    #[test]
+    fn attempt_from_completed_count_is_one_based_and_saturating() {
+        assert_eq!(attempt_from_completed_count(0), 1);
+        assert_eq!(attempt_from_completed_count(4), 5);
+        assert_eq!(attempt_from_completed_count(u32::MAX), u32::MAX);
+        assert_eq!(attempt_from_completed_count_i32(4), Some(5));
+        assert_eq!(attempt_from_completed_count_i32(-1), None);
     }
 }

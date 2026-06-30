@@ -36,6 +36,7 @@ spike; release candidates still require both-product approval.
 | `world-identity-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline likely first | Chairman game DB owner |
 | `http-primitives` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline likely first | Chairman API owner |
 | `idempotency-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman | Airline platform owner |
+| `idempotency-runtime-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline likely first | Chairman service-edge deferral owner |
 | `world-clock-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman optional | Airline cycle owner |
 | `rate-limit-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline likely first | Chairman API owner |
 | `tenant-scope-sqlx` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline likely first | Chairman DB owner |

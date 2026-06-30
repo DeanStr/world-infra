@@ -187,6 +187,16 @@ pub struct Cidr {
 }
 
 impl Cidr {
+    /// Construct a single-IP trusted proxy network.
+    #[must_use]
+    pub const fn single_ip(addr: IpAddr) -> Self {
+        let prefix = match addr {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        Self { addr, prefix }
+    }
+
     /// Parse CIDR notation.
     ///
     /// # Errors
@@ -236,6 +246,63 @@ impl Cidr {
             _ => false,
         }
     }
+
+    /// Return the network address stored in this CIDR.
+    #[must_use]
+    pub const fn addr(self) -> IpAddr {
+        self.addr
+    }
+
+    /// Return the prefix length.
+    #[must_use]
+    pub const fn prefix(self) -> u8 {
+        self.prefix
+    }
+}
+
+/// Product-provided trusted proxy configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TrustedProxyConfig {
+    trusted_proxies: Vec<Cidr>,
+}
+
+impl TrustedProxyConfig {
+    /// Construct a config from trusted proxy CIDRs.
+    #[must_use]
+    pub fn new(trusted_proxies: impl Into<Vec<Cidr>>) -> Self {
+        Self {
+            trusted_proxies: trusted_proxies.into(),
+        }
+    }
+
+    /// Construct a config that trusts only one peer IP.
+    #[must_use]
+    pub fn single_peer(peer: IpAddr) -> Self {
+        Self::new(vec![Cidr::single_ip(peer)])
+    }
+
+    /// Parse a comma-separated CIDR list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpPrimitiveError`] if any CIDR is malformed.
+    pub fn parse(value: impl AsRef<str>) -> Result<Self, HttpPrimitiveError> {
+        parse_trusted_proxies(value).map(Self::new)
+    }
+
+    /// Return whether the peer is trusted.
+    #[must_use]
+    pub fn trusts_peer(&self, peer: IpAddr) -> bool {
+        self.trusted_proxies
+            .iter()
+            .any(|proxy| proxy.contains(peer))
+    }
+
+    /// Access the trusted proxy CIDRs.
+    #[must_use]
+    pub fn trusted_proxies(&self) -> &[Cidr] {
+        &self.trusted_proxies
+    }
 }
 
 /// Parse a comma-separated CIDR list.
@@ -279,6 +346,61 @@ pub fn extract_client_ip(
         HeaderClientIp::Found(addr) => addr,
         HeaderClientIp::Invalid | HeaderClientIp::Missing => peer,
     }
+}
+
+/// Extract the client IP using a trusted proxy config.
+#[must_use]
+pub fn client_ip_from_headers(
+    peer: IpAddr,
+    config: &TrustedProxyConfig,
+    forwarded: Option<&str>,
+    x_forwarded_for: Option<&str>,
+    x_real_ip: Option<&str>,
+) -> IpAddr {
+    extract_client_ip(
+        peer,
+        config.trusted_proxies(),
+        forwarded,
+        x_forwarded_for,
+        x_real_ip,
+    )
+}
+
+/// Extract the client IP from an [`http::HeaderMap`].
+///
+/// This helper is feature-gated so framework-neutral users do not depend on
+/// the `http` crate unless they opt in.
+#[cfg(feature = "http")]
+#[must_use]
+pub fn client_ip_from_header_map(
+    headers: &http::HeaderMap,
+    peer: IpAddr,
+    config: &TrustedProxyConfig,
+) -> IpAddr {
+    let forwarded = joined_header_values(headers, "forwarded");
+    let x_forwarded_for = joined_header_values(headers, "x-forwarded-for");
+    let x_real_ip = joined_header_values(headers, "x-real-ip");
+    client_ip_from_headers(
+        peer,
+        config,
+        forwarded.as_deref(),
+        x_forwarded_for.as_deref(),
+        x_real_ip.as_deref(),
+    )
+}
+
+#[cfg(feature = "http")]
+fn joined_header_values(headers: &http::HeaderMap, name: &'static str) -> Option<String> {
+    let mut values = headers.get_all(name).iter();
+    let first = values.next()?;
+    let mut joined = first
+        .to_str()
+        .map_or_else(|_| "__invalid_header_value__".to_owned(), ToOwned::to_owned);
+    for value in values {
+        joined.push(',');
+        joined.push_str(value.to_str().unwrap_or("__invalid_header_value__"));
+    }
+    Some(joined)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -476,14 +598,17 @@ mod tests {
         let cidr = Cidr::parse("10.0.0.0/8").unwrap();
         assert!(cidr.contains("10.1.2.3".parse().unwrap()));
         assert!(!cidr.contains("11.1.2.3".parse().unwrap()));
+        let single = Cidr::single_ip("10.1.2.3".parse().unwrap());
+        assert!(single.contains("10.1.2.3".parse().unwrap()));
+        assert!(!single.contains("10.1.2.4".parse().unwrap()));
     }
 
     #[test]
     fn trusted_proxy_unlocks_forwarded_headers() {
-        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
-        let client = extract_client_ip(
+        let config = TrustedProxyConfig::parse("10.0.0.0/8").unwrap();
+        let client = client_ip_from_headers(
             "10.1.1.1".parse().unwrap(),
-            &proxies,
+            &config,
             Some(r#"for="203.0.113.10";proto=https"#),
             None,
             None,
@@ -491,12 +616,66 @@ mod tests {
         assert_eq!(client, "203.0.113.10".parse::<IpAddr>().unwrap());
         let untrusted = extract_client_ip(
             "198.51.100.1".parse().unwrap(),
-            &proxies,
+            config.trusted_proxies(),
             Some(r#"for="203.0.113.10""#),
             None,
             None,
         );
         assert_eq!(untrusted, "198.51.100.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn header_map_combines_repeated_forwarded_values() {
+        let config = TrustedProxyConfig::parse("10.0.0.0/8").unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            "forwarded",
+            http::HeaderValue::from_static("for=198.51.100.200"),
+        );
+        headers.append(
+            "forwarded",
+            http::HeaderValue::from_static("for=203.0.113.44, for=10.1.1.1"),
+        );
+
+        let client = client_ip_from_header_map(&headers, "10.1.1.1".parse().unwrap(), &config);
+        assert_eq!(client, "203.0.113.44".parse::<IpAddr>().unwrap());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn header_map_combines_repeated_x_forwarded_for_values() {
+        let config = TrustedProxyConfig::parse("10.0.0.0/8").unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            "x-forwarded-for",
+            http::HeaderValue::from_static("198.51.100.200"),
+        );
+        headers.append(
+            "x-forwarded-for",
+            http::HeaderValue::from_static("203.0.113.44, 10.1.1.1"),
+        );
+
+        let client = client_ip_from_header_map(&headers, "10.1.1.1".parse().unwrap(), &config);
+        assert_eq!(client, "203.0.113.44".parse::<IpAddr>().unwrap());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn header_map_invalid_repeated_header_value_falls_back_to_peer() {
+        let config = TrustedProxyConfig::parse("10.0.0.0/8").unwrap();
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            "x-forwarded-for",
+            http::HeaderValue::from_static("203.0.113.44"),
+        );
+        headers.append(
+            "x-forwarded-for",
+            http::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+
+        let client = client_ip_from_header_map(&headers, "10.1.1.1".parse().unwrap(), &config);
+        assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
     }
 
     #[test]

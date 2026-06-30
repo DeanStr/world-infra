@@ -49,7 +49,7 @@ surface area later.
 | Chairman cycle/outbox/external-alert recovery hardening | Implement in Chairman first | Airline has more mature stale-claim, retry, reconciliation, and lease-recovery patterns. Chairman should benefit from those ideas without forcing its schema into a shared SQL crate. | Add product-local tests and code for the concrete recovery gaps listed below. |
 | Shared `world-cycle-sqlx` / `world-followup-sqlx` crates | Continue to defer | Phase 7 proved the design vocabulary but still did not prove identical authority, transaction, table, or recovery semantics. | Revisit only after Chairman hardening produces product-owned adapters matching the Phase 7 RFC sketches. |
 | Event-fanout transport backend | Defer runtime extraction | Airline and Chairman still differ on Redis/pubsub versus durable outbox polling and replay expectations. | Characterize product signaling requirements; extract no transport until both products share delivery, replay, and failure semantics. |
-| Idempotency runtime backend | Defer runtime extraction | Airline's runtime idempotency is Redis/incarnation-heavy; Chairman is more SQL/request-led. | Keep `idempotency-core` as key vocabulary unless both products adopt a matching runtime claim contract. |
+| Idempotency runtime backend | Deferred in Phase 8; superseded post-plan | Airline's runtime idempotency is Redis/incarnation-heavy; Chairman is more SQL/request-led. | Phase 8 kept `idempotency-core` as key vocabulary. The later `docs/rfcs/idempotency-runtime-core.md` RFC approves a volatile runtime claim-store crate with Chairman adoption deferred. |
 | Tiny SQLSTATE/error classification helper | Watchlist | Both products may repeat narrow database error classification, but a broad DB helper remains too risky. | Collect duplicates while doing product work; extract only after at least two identical product call sites and product-neutral tests exist. |
 | Ledger conventions | Audit only | Finance and ledger authority are still product-domain heavy. | Audit amount-sign, ledger-kind, and registry patterns. Do not add `ledger-core` unless both products expose a shared convention independent of game/business policy. |
 | Auth/commercial-risk helpers | Out of scope | These are product security and business posture, not generic world infrastructure. | Keep outside Phase 8 unless a dedicated security/policy phase is explicitly approved. |
@@ -165,9 +165,11 @@ Airline comparison evidence:
 
 Shared extraction decision:
 
-- `world-cycle-sqlx`, `world-followup-sqlx`, runtime idempotency backends,
-  event-fanout transports, broad `world-db-sqlx` helpers, and ledger helpers
-  remain deferred.
+- `world-cycle-sqlx`, `world-followup-sqlx`, event-fanout transports, broad
+  `world-db-sqlx` helpers, and ledger helpers remain deferred.
+- Runtime idempotency backends were deferred during Phase 8, then superseded by
+  the post-plan `docs/rfcs/idempotency-runtime-core.md` approval for volatile
+  runtime claim stores only.
 - No SQLSTATE/error classification helper was extracted; Phase 8 did not reveal
   two identical product call sites with matching failure semantics.
 

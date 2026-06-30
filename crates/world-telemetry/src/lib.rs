@@ -1,6 +1,6 @@
 //! Shared telemetry setup primitives.
 
-use std::{error::Error, fmt, time::Duration};
+use std::{env, error::Error, fmt, sync::Mutex, time::Duration};
 
 #[cfg(all(
     feature = "opentelemetry",
@@ -93,6 +93,127 @@ impl TelemetryConfig {
         self.exporter_protocol = protocol;
         self
     }
+
+    /// Construct a config from common OpenTelemetry environment variables.
+    ///
+    /// Product-specific deployment policy remains outside this helper. It reads
+    /// `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`,
+    /// `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+    /// `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
+    /// `OTEL_DEPLOYMENT_ENVIRONMENT`, `DEPLOYMENT_ENVIRONMENT`, and
+    /// `OTEL_RESOURCE_ATTRIBUTES`.
+    #[must_use]
+    pub fn from_standard_env(
+        service_name: impl Into<String>,
+        default_filter: impl Into<String>,
+    ) -> Self {
+        Self::from_standard_env_with_options(
+            service_name,
+            default_filter,
+            TelemetryEnvOptions::default(),
+        )
+    }
+
+    /// Construct a config from common OpenTelemetry environment variables with
+    /// explicit fallback options.
+    #[must_use]
+    pub fn from_standard_env_with_options(
+        service_name: impl Into<String>,
+        default_filter: impl Into<String>,
+        options: TelemetryEnvOptions,
+    ) -> Self {
+        let service_name = env_value("OTEL_SERVICE_NAME").unwrap_or_else(|| service_name.into());
+        let traces_endpoint = env_value("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+        let generic_endpoint = env_value("OTEL_EXPORTER_OTLP_ENDPOINT");
+        let protocol = env_value("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+            .or_else(|| env_value("OTEL_EXPORTER_OTLP_PROTOCOL"))
+            .as_deref()
+            .map(parse_exporter_protocol)
+            .unwrap_or(options.default_protocol);
+        let deployment_environment = env_value("OTEL_DEPLOYMENT_ENVIRONMENT")
+            .or_else(|| env_value("DEPLOYMENT_ENVIRONMENT"))
+            .or_else(|| resource_attribute("deployment.environment.name"))
+            .or_else(|| resource_attribute("deployment.environment"));
+
+        Self {
+            service_name,
+            default_filter: default_filter.into(),
+            otlp_endpoint: derive_standard_env_endpoint(
+                traces_endpoint.as_deref(),
+                generic_endpoint.as_deref(),
+                protocol,
+                options.append_http_traces_path,
+            ),
+            exporter_protocol: protocol,
+            service_version: env_value("OTEL_SERVICE_VERSION"),
+            deployment_environment,
+            timeout: Duration::from_secs(10),
+            failure_mode: FailureMode::Strict,
+        }
+    }
+}
+
+/// Options for [`TelemetryConfig::from_standard_env_with_options`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TelemetryEnvOptions {
+    /// Protocol to use when `OTEL_EXPORTER_OTLP_PROTOCOL` is absent.
+    pub default_protocol: ExporterProtocol,
+    /// Whether generic HTTP OTLP endpoints should receive `/v1/traces`.
+    pub append_http_traces_path: bool,
+}
+
+impl Default for TelemetryEnvOptions {
+    fn default() -> Self {
+        Self {
+            default_protocol: ExporterProtocol::HttpProtobuf,
+            append_http_traces_path: true,
+        }
+    }
+}
+
+fn env_value(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_exporter_protocol(value: &str) -> ExporterProtocol {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "grpc" | "grpc-tonic" => ExporterProtocol::GrpcTonic,
+        _ => ExporterProtocol::HttpProtobuf,
+    }
+}
+
+fn resource_attribute(name: &str) -> Option<String> {
+    env_value("OTEL_RESOURCE_ATTRIBUTES").and_then(|attributes| {
+        attributes.split(',').find_map(|attribute| {
+            let (key, value) = attribute.split_once('=')?;
+            (key.trim() == name)
+                .then(|| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        })
+    })
+}
+
+fn derive_standard_env_endpoint(
+    traces_endpoint: Option<&str>,
+    generic_endpoint: Option<&str>,
+    protocol: ExporterProtocol,
+    append_http_traces_path: bool,
+) -> Option<String> {
+    traces_endpoint
+        .and_then(non_blank)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            generic_endpoint.and_then(non_blank).map(|endpoint| {
+                if protocol == ExporterProtocol::HttpProtobuf && append_http_traces_path {
+                    format!("{}/v1/traces", endpoint.trim_end_matches('/'))
+                } else {
+                    endpoint.to_owned()
+                }
+            })
+        })
 }
 
 /// Derive an OTLP traces endpoint using common `/v1/traces` suffixing rules.
@@ -223,6 +344,103 @@ impl Drop for TelemetryGuard {
             eprintln!("{error}");
         }
     }
+}
+
+/// Process-local one-time telemetry initializer.
+///
+/// This is intended for binary/service entrypoints and tests that need a
+/// best-effort "initialize once" primitive. Libraries should accept tracing as
+/// process-owned infrastructure instead of calling this internally.
+#[derive(Debug)]
+pub struct TelemetryOnce {
+    state: Mutex<TelemetryOnceState>,
+}
+
+#[derive(Debug)]
+enum TelemetryOnceState {
+    Empty,
+    Active(TelemetryGuard),
+    Shutdown,
+}
+
+impl TelemetryOnce {
+    /// Create an empty one-time initializer.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            state: Mutex::new(TelemetryOnceState::Empty),
+        }
+    }
+
+    /// Initialize telemetry once.
+    ///
+    /// Returns `Ok(true)` when this call initialized telemetry and `Ok(false)`
+    /// when telemetry was already initialized through this guard or this guard
+    /// was previously shut down. Shutdown is terminal because the global
+    /// tracing subscriber cannot be unset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryError`] from [`init_telemetry`].
+    pub fn init(&self, config: &TelemetryConfig) -> Result<bool, TelemetryError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|error| TelemetryError::Subscriber(error.to_string()))?;
+        if !matches!(*state, TelemetryOnceState::Empty) {
+            return Ok(false);
+        }
+        *state = TelemetryOnceState::Active(init_telemetry(config)?);
+        Ok(true)
+    }
+
+    /// Shut down the guard initialized through this instance, if any.
+    ///
+    /// After shutdown, later [`TelemetryOnce::init`] calls return `Ok(false)`
+    /// instead of attempting to reinstall the process-global tracing subscriber.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryShutdownError`] if provider shutdown fails.
+    pub fn shutdown(&self) -> Result<(), TelemetryShutdownError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|error| TelemetryShutdownError::new(error.to_string()))?;
+        let current = std::mem::replace(&mut *state, TelemetryOnceState::Shutdown);
+        if let TelemetryOnceState::Active(mut guard) = current {
+            guard.shutdown()?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for TelemetryOnce {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static GLOBAL_TELEMETRY_ONCE: TelemetryOnce = TelemetryOnce::new();
+
+/// Initialize global process telemetry once.
+///
+/// See [`TelemetryOnce::init`] for semantics.
+///
+/// # Errors
+///
+/// Returns [`TelemetryError`] from [`init_telemetry`].
+pub fn init_global_once(config: &TelemetryConfig) -> Result<bool, TelemetryError> {
+    GLOBAL_TELEMETRY_ONCE.init(config)
+}
+
+/// Shut down telemetry initialized with [`init_global_once`].
+///
+/// # Errors
+///
+/// Returns [`TelemetryShutdownError`] if provider shutdown fails.
+pub fn shutdown_global_once() -> Result<(), TelemetryShutdownError> {
+    GLOBAL_TELEMETRY_ONCE.shutdown()
 }
 
 /// Initialize tracing from a [`TelemetryConfig`].
@@ -402,6 +620,8 @@ pub fn init_telemetry(_config: &TelemetryConfig) -> Result<TelemetryGuard, Telem
 mod tests {
     use super::*;
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn endpoint_derivation_preserves_traces_endpoint() {
         assert_eq!(
@@ -426,6 +646,112 @@ mod tests {
     }
 
     #[test]
+    fn standard_env_config_reads_common_otlp_values() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+        let previous_protocol = env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok();
+        let previous_traces_protocol = env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL").ok();
+        let previous_traces = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").ok();
+        let previous_environment = env::var("OTEL_DEPLOYMENT_ENVIRONMENT").ok();
+        env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel");
+        env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
+        env::remove_var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL");
+        env::remove_var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+        env::set_var("OTEL_DEPLOYMENT_ENVIRONMENT", "staging");
+
+        let config = TelemetryConfig::from_standard_env("svc", "info");
+        assert_eq!(
+            config.otlp_endpoint.as_deref(),
+            Some("http://otel/v1/traces")
+        );
+        assert_eq!(config.exporter_protocol, ExporterProtocol::HttpProtobuf);
+        assert_eq!(config.deployment_environment.as_deref(), Some("staging"));
+
+        restore_env("OTEL_EXPORTER_OTLP_ENDPOINT", previous_endpoint);
+        restore_env("OTEL_EXPORTER_OTLP_PROTOCOL", previous_protocol);
+        restore_env(
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            previous_traces_protocol,
+        );
+        restore_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", previous_traces);
+        restore_env("OTEL_DEPLOYMENT_ENVIRONMENT", previous_environment);
+    }
+
+    #[test]
+    fn standard_env_config_keeps_grpc_generic_endpoint_raw() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+        let previous_protocol = env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok();
+        let previous_traces_protocol = env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL").ok();
+        let previous_traces = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").ok();
+        env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317");
+        env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc");
+        env::remove_var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL");
+        env::remove_var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+
+        let config = TelemetryConfig::from_standard_env("svc", "info");
+        assert_eq!(config.otlp_endpoint.as_deref(), Some("http://otel:4317"));
+        assert_eq!(config.exporter_protocol, ExporterProtocol::GrpcTonic);
+
+        restore_env("OTEL_EXPORTER_OTLP_ENDPOINT", previous_endpoint);
+        restore_env("OTEL_EXPORTER_OTLP_PROTOCOL", previous_protocol);
+        restore_env(
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            previous_traces_protocol,
+        );
+        restore_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", previous_traces);
+    }
+
+    #[test]
+    fn traces_protocol_env_overrides_generic_protocol() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+        let previous_protocol = env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok();
+        let previous_traces_protocol = env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL").ok();
+        let previous_traces = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").ok();
+        env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317");
+        env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
+        env::set_var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc");
+        env::remove_var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+
+        let config = TelemetryConfig::from_standard_env("svc", "info");
+        assert_eq!(config.otlp_endpoint.as_deref(), Some("http://otel:4317"));
+        assert_eq!(config.exporter_protocol, ExporterProtocol::GrpcTonic);
+
+        restore_env("OTEL_EXPORTER_OTLP_ENDPOINT", previous_endpoint);
+        restore_env("OTEL_EXPORTER_OTLP_PROTOCOL", previous_protocol);
+        restore_env(
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            previous_traces_protocol,
+        );
+        restore_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", previous_traces);
+    }
+
+    #[test]
+    fn traces_endpoint_env_is_exact_even_for_grpc() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+        let previous_protocol = env::var("OTEL_EXPORTER_OTLP_PROTOCOL").ok();
+        let previous_traces_protocol = env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL").ok();
+        let previous_traces = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").ok();
+        env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4317");
+        env::set_var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://traces:4317");
+        env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc");
+        env::remove_var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL");
+
+        let config = TelemetryConfig::from_standard_env("svc", "info");
+        assert_eq!(config.otlp_endpoint.as_deref(), Some("http://traces:4317"));
+
+        restore_env("OTEL_EXPORTER_OTLP_ENDPOINT", previous_endpoint);
+        restore_env("OTEL_EXPORTER_OTLP_PROTOCOL", previous_protocol);
+        restore_env(
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            previous_traces_protocol,
+        );
+        restore_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", previous_traces);
+    }
+
+    #[test]
     fn shutdown_error_display_names_shutdown() {
         assert_eq!(
             TelemetryShutdownError::new("boom").to_string(),
@@ -441,5 +767,40 @@ mod tests {
         guard
             .shutdown()
             .expect("second local guard shutdown should be ok");
+    }
+
+    #[test]
+    fn telemetry_once_shutdown_before_init_is_terminal() {
+        let once = TelemetryOnce::new();
+        once.shutdown().expect("empty shutdown should be ok");
+        assert_eq!(
+            once.init(&TelemetryConfig::new("svc", "info")),
+            Ok(false),
+            "shutdown should prevent later subscriber initialization"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "subscriber")]
+    fn telemetry_once_shutdown_after_active_guard_is_terminal() {
+        let once = TelemetryOnce {
+            state: Mutex::new(TelemetryOnceState::Active(TelemetryGuard::local())),
+        };
+        once.shutdown().expect("active shutdown should be ok");
+        assert_eq!(
+            once.init(&TelemetryConfig::new("svc", "info")),
+            Ok(false),
+            "shutdown should make later init a no-op"
+        );
+        once.shutdown()
+            .expect("second shutdown after terminal state should be ok");
+    }
+
+    fn restore_env(name: &str, value: Option<String>) {
+        if let Some(value) = value {
+            env::set_var(name, value);
+        } else {
+            env::remove_var(name);
+        }
     }
 }

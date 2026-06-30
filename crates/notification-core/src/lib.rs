@@ -249,6 +249,46 @@ impl NotificationAttempt {
         }
     }
 
+    /// Construct a provider attempt number from a signed product database field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError::InvalidAttempt`] for zero or negative
+    /// values.
+    pub fn from_i32(value: i32) -> Result<Self, NotificationError> {
+        if value <= 0 {
+            return Err(NotificationError::InvalidAttempt);
+        }
+        Self::new(u32::try_from(value).map_err(|_| NotificationError::InvalidAttempt)?)
+    }
+
+    /// Construct the next attempt from a completed-attempt count.
+    ///
+    /// A completed count of `0` maps to attempt `1`.
+    #[must_use]
+    pub const fn from_completed_count(completed_count: u32) -> Self {
+        let attempt = completed_count.saturating_add(1);
+        Self(match NonZeroU32::new(attempt) {
+            Some(value) => value,
+            None => NonZeroU32::MAX,
+        })
+    }
+
+    /// Construct the next attempt from a signed completed-attempt database
+    /// field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError::InvalidAttempt`] for negative values.
+    pub fn from_completed_count_i32(completed_count: i32) -> Result<Self, NotificationError> {
+        if completed_count < 0 {
+            return Err(NotificationError::InvalidAttempt);
+        }
+        Ok(Self::from_completed_count(
+            u32::try_from(completed_count).map_err(|_| NotificationError::InvalidAttempt)?,
+        ))
+    }
+
     /// Return the raw attempt number.
     #[must_use]
     pub const fn get(self) -> u32 {
@@ -274,6 +314,12 @@ impl fmt::Display for NotificationAttempt {
     }
 }
 
+/// Convert a completed-attempt count into the next notification attempt.
+#[must_use]
+pub const fn attempt_from_completed_count(completed_count: u32) -> NotificationAttempt {
+    NotificationAttempt::from_completed_count(completed_count)
+}
+
 /// Metadata common to a claimed notification delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationDeliveryContext<Id> {
@@ -285,6 +331,104 @@ pub struct NotificationDeliveryContext<Id> {
     pub delivery_version: DeliveryVersion,
     /// Current 1-based provider attempt number for this claim.
     pub attempt: NotificationAttempt,
+}
+
+impl<Id> NotificationDeliveryContext<Id> {
+    /// Construct a delivery context from validated values.
+    #[must_use]
+    pub const fn new(
+        delivery_id: Id,
+        channel: NotificationChannel,
+        delivery_version: DeliveryVersion,
+        attempt: NotificationAttempt,
+    ) -> Self {
+        Self {
+            delivery_id,
+            channel,
+            delivery_version,
+            attempt,
+        }
+    }
+
+    /// Construct a delivery context from common product database fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if channel, version, or attempt values
+    /// are invalid.
+    pub fn from_raw_fields(
+        delivery_id: Id,
+        channel: impl AsRef<str>,
+        delivery_version: i32,
+        attempt: u32,
+    ) -> Result<Self, NotificationError> {
+        Ok(Self::new(
+            delivery_id,
+            channel.as_ref().parse()?,
+            DeliveryVersion::from_i32(delivery_version)?,
+            NotificationAttempt::new(attempt)?,
+        ))
+    }
+
+    /// Construct a delivery context from signed product database fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if channel, version, or attempt values
+    /// are invalid.
+    pub fn from_raw_i32_fields(
+        delivery_id: Id,
+        channel: impl AsRef<str>,
+        delivery_version: i32,
+        attempt: i32,
+    ) -> Result<Self, NotificationError> {
+        Ok(Self::new(
+            delivery_id,
+            channel.as_ref().parse()?,
+            DeliveryVersion::from_i32(delivery_version)?,
+            NotificationAttempt::from_i32(attempt)?,
+        ))
+    }
+
+    /// Construct a delivery context where persistence stores completed count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if channel or version values are invalid.
+    pub fn from_completed_count_fields(
+        delivery_id: Id,
+        channel: impl AsRef<str>,
+        delivery_version: i32,
+        completed_attempt_count: u32,
+    ) -> Result<Self, NotificationError> {
+        Ok(Self::new(
+            delivery_id,
+            channel.as_ref().parse()?,
+            DeliveryVersion::from_i32(delivery_version)?,
+            NotificationAttempt::from_completed_count(completed_attempt_count),
+        ))
+    }
+
+    /// Construct a delivery context where persistence stores signed completed
+    /// count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError`] if channel, version, or completed-count
+    /// values are invalid.
+    pub fn from_completed_count_i32_fields(
+        delivery_id: Id,
+        channel: impl AsRef<str>,
+        delivery_version: i32,
+        completed_attempt_count: i32,
+    ) -> Result<Self, NotificationError> {
+        Ok(Self::new(
+            delivery_id,
+            channel.as_ref().parse()?,
+            DeliveryVersion::from_i32(delivery_version)?,
+            NotificationAttempt::from_completed_count_i32(completed_attempt_count)?,
+        ))
+    }
 }
 
 /// Sanitized, product-provided provider failure code.
@@ -607,9 +751,45 @@ mod tests {
     #[test]
     fn validates_notification_attempt() {
         assert_eq!(NotificationAttempt::new(2).unwrap().as_u32(), 2);
+        assert_eq!(NotificationAttempt::from_i32(2).unwrap().as_u32(), 2);
+        assert_eq!(NotificationAttempt::from_completed_count(2).as_u32(), 3);
+        assert_eq!(
+            NotificationAttempt::from_completed_count_i32(2)
+                .unwrap()
+                .as_u32(),
+            3
+        );
+        assert_eq!(attempt_from_completed_count(0).as_u32(), 1);
         assert_eq!(
             NotificationAttempt::new(0),
             Err(NotificationError::InvalidAttempt)
+        );
+        assert_eq!(
+            NotificationAttempt::from_i32(-1),
+            Err(NotificationError::InvalidAttempt)
+        );
+        assert_eq!(
+            NotificationAttempt::from_completed_count_i32(-1),
+            Err(NotificationError::InvalidAttempt)
+        );
+    }
+
+    #[test]
+    fn builds_delivery_context_from_raw_fields() {
+        let context =
+            NotificationDeliveryContext::from_completed_count_fields(7_i64, "email", 2, 4).unwrap();
+        assert_eq!(context.delivery_id, 7);
+        assert_eq!(context.channel, NotificationChannel::Email);
+        assert_eq!(context.delivery_version.as_i32(), 2);
+        assert_eq!(context.attempt.as_u32(), 5);
+
+        let context =
+            NotificationDeliveryContext::from_completed_count_i32_fields(7_i64, "email", 2, 4)
+                .unwrap();
+        assert_eq!(context.attempt.as_u32(), 5);
+        assert!(
+            NotificationDeliveryContext::from_completed_count_i32_fields(7_i64, "email", 2, -1)
+                .is_err()
         );
     }
 

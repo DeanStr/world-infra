@@ -106,6 +106,16 @@ impl UploadContentType {
     /// Returns [`UploadError::UnsupportedContentType`] for blank, non-exact,
     /// alias, control-character, or unsupported values.
     pub fn parse_strict(value: &str) -> Result<Self, UploadError> {
+        Self::parse_registered_strict(value)
+    }
+
+    /// Parse an exact registered content type without aliases.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UploadError::UnsupportedContentType`] for blank, non-exact,
+    /// alias, control-character, or unsupported values.
+    pub fn parse_registered_strict(value: &str) -> Result<Self, UploadError> {
         if value.is_empty() || value != value.trim() || value.chars().any(|ch| ch.is_control()) {
             return Err(UploadError::UnsupportedContentType(value.to_owned()));
         }
@@ -117,6 +127,61 @@ impl UploadContentType {
             "application/pdf" => Ok(Self::Pdf),
             other => Err(UploadError::UnsupportedContentType(other.to_owned())),
         }
+    }
+
+    /// Parse and require a product-provided content-type policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UploadError`] when the raw content type is invalid or outside
+    /// the allowed product subset.
+    pub fn parse_with_policy(
+        value: &str,
+        policy: ContentTypePolicy<'_>,
+    ) -> Result<Self, UploadError> {
+        let parsed = if policy.allow_jpeg_alias {
+            parse_strict_with_optional_jpeg_alias(value)?
+        } else {
+            Self::parse_registered_strict(value)?
+        };
+        parsed.require_allowed(policy.allowed)
+    }
+}
+
+fn parse_strict_with_optional_jpeg_alias(value: &str) -> Result<UploadContentType, UploadError> {
+    if value.is_empty() || value != value.trim() || value.chars().any(|ch| ch.is_control()) {
+        return Err(UploadError::UnsupportedContentType(value.to_owned()));
+    }
+    if value.eq_ignore_ascii_case("image/jpg") {
+        return Ok(UploadContentType::Jpeg);
+    }
+    UploadContentType::parse_registered_strict(value)
+}
+
+/// Product-owned upload content-type policy.
+#[derive(Debug, Clone, Copy)]
+pub struct ContentTypePolicy<'a> {
+    /// Allowed subset of shared content-type vocabulary.
+    pub allowed: &'a [UploadContentType],
+    /// Whether `image/jpg` should be accepted as a JPEG alias.
+    pub allow_jpeg_alias: bool,
+}
+
+impl<'a> ContentTypePolicy<'a> {
+    /// Construct a policy with exact registered MIME parsing.
+    #[must_use]
+    pub const fn new(allowed: &'a [UploadContentType]) -> Self {
+        Self {
+            allowed,
+            allow_jpeg_alias: false,
+        }
+    }
+
+    /// Return a copy with `image/jpg` alias handling enabled or disabled.
+    #[must_use]
+    pub const fn with_jpeg_alias(mut self, allow_jpeg_alias: bool) -> Self {
+        self.allow_jpeg_alias = allow_jpeg_alias;
+        self
     }
 }
 
@@ -290,6 +355,42 @@ impl ScopedObjectKey {
     }
 }
 
+/// Validated upload request fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedUploadRequest {
+    /// Validated object key.
+    pub object_key: ScopedObjectKey,
+    /// Validated content type.
+    pub content_type: UploadContentType,
+    /// Declared upload size in bytes.
+    pub size: u64,
+}
+
+/// Validate common upload request fields together.
+///
+/// This helper does not contact object storage or inspect uploaded bytes.
+///
+/// # Errors
+///
+/// Returns [`UploadError`] if the object key, content type, or size is invalid.
+pub fn validate_upload_request(
+    object_key: impl AsRef<str>,
+    object_key_policy: ObjectKeyPolicy<'_>,
+    content_type: &str,
+    content_type_policy: ContentTypePolicy<'_>,
+    size: u64,
+    size_limit: UploadSizeLimit,
+) -> Result<ValidatedUploadRequest, UploadError> {
+    let object_key = ScopedObjectKey::new_with_policy(object_key, object_key_policy)?;
+    let content_type = UploadContentType::parse_with_policy(content_type, content_type_policy)?;
+    size_limit.validate(size)?;
+    Ok(ValidatedUploadRequest {
+        object_key,
+        content_type,
+        size,
+    })
+}
+
 /// Conservative object-key character policy.
 #[must_use]
 pub const fn conservative_object_key_char(ch: char) -> bool {
@@ -407,5 +508,35 @@ mod tests {
             "image/jpg".parse::<UploadContentType>(),
             Ok(UploadContentType::Jpeg)
         );
+    }
+
+    #[test]
+    fn content_type_policy_controls_jpeg_alias() {
+        let images = [UploadContentType::Jpeg];
+        let exact = ContentTypePolicy::new(&images);
+        let alias = exact.with_jpeg_alias(true);
+        assert!(UploadContentType::parse_with_policy("image/jpg", exact).is_err());
+        assert_eq!(
+            UploadContentType::parse_with_policy("image/jpg", alias),
+            Ok(UploadContentType::Jpeg)
+        );
+        assert!(UploadContentType::parse_with_policy("image/jpg\n", alias).is_err());
+    }
+
+    #[test]
+    fn validates_upload_request_fields_together() {
+        let images = [UploadContentType::Png];
+        let request = validate_upload_request(
+            "uploads/account-1/logo.png",
+            ObjectKeyPolicy::new("uploads/account-1/"),
+            "image/png",
+            ContentTypePolicy::new(&images),
+            512,
+            UploadSizeLimit::new(1024).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(request.object_key.as_str(), "uploads/account-1/logo.png");
+        assert_eq!(request.content_type, UploadContentType::Png);
+        assert_eq!(request.size, 512);
     }
 }
