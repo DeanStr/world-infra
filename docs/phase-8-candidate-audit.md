@@ -136,6 +136,10 @@ Phase 8 is complete when:
 Phase 8 completed as product-first hardening and release hygiene, with no new
 shared crate.
 
+This closes the numbered extraction plan through Phase 8. Future work should be
+tracked as concrete backlog items, candidate audits, or narrow RFCs rather than
+creating a Phase 9 by default.
+
 Chairman recovery matrix:
 
 | Gap | Evidence | Decision |
