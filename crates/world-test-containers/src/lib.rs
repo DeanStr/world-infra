@@ -10,8 +10,11 @@ pub mod postgres {
     use std::borrow::Cow;
 
     use testcontainers::{
-        core::wait::LogWaitStrategy, core::CopyToContainer, core::WaitFor, Image,
+        core::wait::LogWaitStrategy, core::ContainerPort, core::CopyToContainer, core::WaitFor,
+        Image,
     };
+
+    const POSTGRES_PORTS: &[ContainerPort] = &[ContainerPort::Tcp(5432)];
 
     /// Tagged official Postgres image for Docker-backed tests.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +62,10 @@ pub mod postgres {
             )]
         }
 
+        fn expose_ports(&self) -> &[ContainerPort] {
+            POSTGRES_PORTS
+        }
+
         fn env_vars(
             &self,
         ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
@@ -85,7 +92,9 @@ pub mod valkey {
 
     use std::borrow::Cow;
 
-    use testcontainers::{core::CopyToContainer, core::WaitFor, Image};
+    use testcontainers::{core::ContainerPort, core::CopyToContainer, core::WaitFor, Image};
+
+    const VALKEY_PORTS: &[ContainerPort] = &[ContainerPort::Tcp(6379)];
 
     /// Tagged official Valkey image for Docker-backed Redis-protocol tests.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +136,10 @@ pub mod valkey {
             vec![WaitFor::message_on_stdout("Ready to accept connections")]
         }
 
+        fn expose_ports(&self) -> &[ContainerPort] {
+            VALKEY_PORTS
+        }
+
         fn env_vars(
             &self,
         ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
@@ -154,6 +167,10 @@ mod tests {
         assert_eq!(image.name(), "postgres");
         assert_eq!(image.tag(), "16-alpine");
         assert_eq!(image.ready_conditions().len(), 1);
+        assert_eq!(
+            image.expose_ports(),
+            &[testcontainers::core::ContainerPort::Tcp(5432)]
+        );
     }
 
     #[cfg(feature = "valkey")]
@@ -165,5 +182,9 @@ mod tests {
         assert_eq!(image.name(), "valkey/valkey");
         assert_eq!(image.tag(), "8.1-bookworm");
         assert_eq!(image.ready_conditions().len(), 1);
+        assert_eq!(
+            image.expose_ports(),
+            &[testcontainers::core::ContainerPort::Tcp(6379)]
+        );
     }
 }
