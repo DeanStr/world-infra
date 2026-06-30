@@ -11,6 +11,7 @@ Current baseline:
 - Tagged source: `87a8bbc90f6b397c9a3dcebf2ac959fb9ab0a872`
 - Airline rc17 pin: `cbf8a02ff`
 - Chairman rc17 pin: `3fdd004`
+- Chairman Phase 8 recovery characterization/fix: `4498be6`
 
 `world-infra-v0.1.0-rc.16` has no shared crate-code delta over the Phase 6
 crate source consumed by products. It records Phase 7 RFC/test-mapping evidence
@@ -143,7 +144,7 @@ Chairman recovery matrix:
 | Stuck phase state | `crates/chairman-game-db/src/rules/persistence/cycle_events.rs` upserts phase completion by `(cycle_job_id, phase)`, preserves first `completed_at`, and uses stable phase idempotency keys. | Characterized as product-owned SQL; no shared extraction. |
 | Repair dry-run/apply visibility | `AdminCycleRepairReport` returns candidate counts, mutation counts, `dry_run`, and warnings. Dry run mutates no rows; apply reports released/requeued counts. | Existing operator report is the Phase 8 surface. |
 | Outbox drain idempotency | Chairman now has focused tests around the drain SQL: it only claims `delivered_at is null` rows, uses `for update skip locked`, and marks delivery with `delivered_at = now()`. | Characterized locally; no shared outbox SQL crate. |
-| External-alert lease expiry | Chairman now has focused tests proving claim/count SQL includes expired `sending` leases, prioritizes stale sending rows, uses `skip locked`, and records reclaimed leases. | Product-owned external-alert leasing is sufficient for Phase 8. |
+| External-alert lease expiry | Chairman now has focused tests proving claim/count SQL includes expired `sending` leases, prioritizes stale sending rows, uses `skip locked`, records reclaimed leases, and reports due counts with the configured lease timeout rather than a hard-coded default. | Product-owned external-alert leasing is sufficient for Phase 8. |
 | Retry exhaustion reporting | `apps/chairman-worker/src/main.rs` covers bounded retry/backoff and terminal exhaustion; `apps/chairman-worker/src/delivery_utils.rs` keeps Chairman's max-attempt policy product-owned. | No shared provider terminal policy adoption. |
 | Ambiguous-after-side-effect handling | `ExternalAlertDeliveryFinalizer` maps ambiguous-after-side-effect outcomes to terminal failure with explicit error text rather than silent retry. | Conservative local policy retained. |
 | Worker run report/operator visibility | `CycleRunReport`, `OutboxDeliveryRunReport`, `ExternalAlertDeliveryRunReport`, admin audit reports, and worker logs expose cycle, outbox, and delivery counts. | Existing reports satisfy Phase 8 operator visibility. |
@@ -184,5 +185,7 @@ Release and pin evidence:
   `87a8bbc90f6b397c9a3dcebf2ac959fb9ab0a872`.
 - Chairman rc17 pin:
   `3fdd004`.
+- Chairman Phase 8 recovery characterization/fix:
+  `4498be6dbe098e08f9499e74494588dd621dd761`.
 - Airline rc17 pin:
   `cbf8a02ff`.
