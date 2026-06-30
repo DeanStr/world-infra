@@ -4,7 +4,11 @@
 //! exceptions, and framework build steps. This crate provides small validators
 //! that make production static artifacts harder to misconfigure.
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 /// Deployment environment class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,6 +100,41 @@ impl fmt::Display for StaticWebError {
 
 impl Error for StaticWebError {}
 
+/// Error returned by public URL validation with host-policy checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticWebUrlPolicyError {
+    /// Base URL validation failed.
+    Url(StaticWebError),
+    /// A host was rejected by a production/static hosting policy.
+    RejectedHost {
+        /// Field name.
+        name: String,
+        /// Observed host.
+        host: String,
+        /// Rejection reason.
+        reason: &'static str,
+    },
+}
+
+impl fmt::Display for StaticWebUrlPolicyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Url(error) => error.fmt(f),
+            Self::RejectedHost { name, host, reason } => {
+                write!(f, "{name} host {host} is rejected: {reason}")
+            }
+        }
+    }
+}
+
+impl Error for StaticWebUrlPolicyError {}
+
+impl From<StaticWebError> for StaticWebUrlPolicyError {
+    fn from(error: StaticWebError) -> Self {
+        Self::Url(error)
+    }
+}
+
 /// Parsed public URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicUrl {
@@ -103,6 +142,48 @@ pub struct PublicUrl {
     pub scheme: String,
     /// Host and optional path/query/fragment.
     pub remainder: String,
+}
+
+/// Optional host checks for production/static runtime URLs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HostPolicy {
+    /// Reject localhost and `.localhost` names.
+    pub reject_localhost: bool,
+    /// Reject loopback, private, link-local, and unspecified IP literals.
+    pub reject_private_ips: bool,
+    /// Reject placeholder/documentation hostnames and documentation IP ranges.
+    pub reject_placeholder_hosts: bool,
+}
+
+impl HostPolicy {
+    /// No host restrictions beyond URL syntax.
+    #[must_use]
+    pub const fn permissive() -> Self {
+        Self {
+            reject_localhost: false,
+            reject_private_ips: false,
+            reject_placeholder_hosts: false,
+        }
+    }
+
+    /// Production-oriented host restrictions.
+    #[must_use]
+    pub const fn production() -> Self {
+        Self {
+            reject_localhost: true,
+            reject_private_ips: true,
+            reject_placeholder_hosts: true,
+        }
+    }
+}
+
+/// Parsed static header line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticHeader {
+    /// Header name.
+    pub name: String,
+    /// Header value.
+    pub value: String,
 }
 
 /// Validate a public URL for static web runtime config.
@@ -117,8 +198,40 @@ pub fn validate_public_url(
     kind: PublicUrlKind,
     env: EnvKind,
 ) -> Result<PublicUrl, StaticWebError> {
+    validate_public_url_base(name.as_ref(), value.as_ref(), kind, env)
+}
+
+/// Validate a public URL with optional host policy checks.
+///
+/// # Errors
+///
+/// Returns [`StaticWebError`] for blank, malformed, insecure production-like,
+/// or policy-rejected URLs.
+pub fn validate_public_url_with_host_policy(
+    name: impl AsRef<str>,
+    value: impl AsRef<str>,
+    kind: PublicUrlKind,
+    env: EnvKind,
+    host_policy: HostPolicy,
+) -> Result<PublicUrl, StaticWebUrlPolicyError> {
     let name = name.as_ref();
-    let value = value.as_ref().trim();
+    let public_url = validate_public_url_base(name, value.as_ref(), kind, env)?;
+    let host = authority_host(&public_url.remainder).ok_or_else(|| {
+        StaticWebUrlPolicyError::Url(StaticWebError::InvalidUrl {
+            name: name.to_owned(),
+        })
+    })?;
+    validate_host_policy(name, host, host_policy)?;
+    Ok(public_url)
+}
+
+fn validate_public_url_base(
+    name: &str,
+    value: &str,
+    kind: PublicUrlKind,
+    env: EnvKind,
+) -> Result<PublicUrl, StaticWebError> {
+    let value = value.trim();
     if value.is_empty() {
         return Err(StaticWebError::Empty {
             name: name.to_owned(),
@@ -142,7 +255,7 @@ pub fn validate_public_url(
         || remainder
             .chars()
             .any(|ch| ch.is_whitespace() || ch.is_control())
-        || host_port(remainder).is_none()
+        || authority_host(remainder).is_none()
     {
         return Err(StaticWebError::InvalidUrl {
             name: name.to_owned(),
@@ -165,7 +278,7 @@ pub fn validate_public_url(
     })
 }
 
-fn host_port(remainder: &str) -> Option<&str> {
+fn authority_host(remainder: &str) -> Option<&str> {
     let authority = remainder
         .split(['/', '?', '#'])
         .next()
@@ -175,12 +288,15 @@ fn host_port(remainder: &str) -> Option<&str> {
         if host.is_empty() || port.strip_prefix(':').is_some_and(|port| port.is_empty()) {
             return None;
         }
+        if host.parse::<IpAddr>().is_err() {
+            return None;
+        }
         return if port.is_empty()
             || port
                 .strip_prefix(':')
                 .is_some_and(|port| port.chars().all(|ch| ch.is_ascii_digit()))
         {
-            Some(authority)
+            Some(host)
         } else {
             None
         };
@@ -199,7 +315,216 @@ fn host_port(remainder: &str) -> Option<&str> {
             return None;
         }
     }
-    Some(authority)
+    Some(host)
+}
+
+fn validate_host_policy(
+    name: &str,
+    host: &str,
+    policy: HostPolicy,
+) -> Result<(), StaticWebUrlPolicyError> {
+    let normalized = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    let parsed_ip = normalized.parse::<IpAddr>().ok();
+    let noncanonical_ipv4 = parsed_ip
+        .is_none()
+        .then(|| parse_noncanonical_ipv4_literal(&normalized))
+        .flatten();
+    if (policy.reject_private_ips || policy.reject_placeholder_hosts) && noncanonical_ipv4.is_some()
+    {
+        return Err(StaticWebUrlPolicyError::RejectedHost {
+            name: name.to_owned(),
+            host: host.to_owned(),
+            reason: "non-canonical IPv4 host",
+        });
+    }
+    if policy.reject_localhost && (normalized == "localhost" || normalized.ends_with(".localhost"))
+    {
+        return Err(StaticWebUrlPolicyError::RejectedHost {
+            name: name.to_owned(),
+            host: host.to_owned(),
+            reason: "localhost host",
+        });
+    }
+    if policy.reject_placeholder_hosts && is_placeholder_host(&normalized) {
+        return Err(StaticWebUrlPolicyError::RejectedHost {
+            name: name.to_owned(),
+            host: host.to_owned(),
+            reason: "placeholder host",
+        });
+    }
+    if policy.reject_placeholder_hosts {
+        if let Some(ip) = parsed_ip {
+            if is_documentation_ip(ip) {
+                return Err(StaticWebUrlPolicyError::RejectedHost {
+                    name: name.to_owned(),
+                    host: host.to_owned(),
+                    reason: "documentation IP",
+                });
+            }
+        }
+    }
+    if policy.reject_private_ips {
+        if let Some(ip) = parsed_ip {
+            if is_private_like_ip(ip) {
+                return Err(StaticWebUrlPolicyError::RejectedHost {
+                    name: name.to_owned(),
+                    host: host.to_owned(),
+                    reason: "private or local IP",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_placeholder_host(host: &str) -> bool {
+    matches!(
+        host,
+        "example"
+            | "example.com"
+            | "example.org"
+            | "example.net"
+            | "placeholder"
+            | "changeme"
+            | "todo"
+    ) || host.ends_with(".example")
+        || host.ends_with(".example.com")
+        || host.ends_with(".example.org")
+        || host.ends_with(".example.net")
+        || host.ends_with(".invalid")
+}
+
+fn parse_noncanonical_ipv4_literal(host: &str) -> Option<Ipv4Addr> {
+    let parts = host.split('.').collect::<Vec<_>>();
+    if parts.is_empty() || parts.len() > 4 || parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+
+    let mut numbers = Vec::with_capacity(parts.len());
+    for part in parts {
+        numbers.push(parse_ipv4_number(part)?);
+    }
+
+    let last_index = numbers.len() - 1;
+    if numbers[..last_index].iter().any(|number| *number > 255) {
+        return None;
+    }
+    let last_limit = 256_u64.pow((5 - numbers.len()) as u32);
+    if numbers[last_index] >= last_limit {
+        return None;
+    }
+
+    let mut value = numbers[last_index];
+    for (index, number) in numbers[..last_index].iter().enumerate() {
+        value += number << (8 * (3 - index));
+    }
+    Some(Ipv4Addr::from(value as u32))
+}
+
+fn parse_ipv4_number(part: &str) -> Option<u64> {
+    if part.is_empty() {
+        return None;
+    }
+    let (digits, radix) = if let Some(rest) = part.strip_prefix("0x") {
+        (rest, 16)
+    } else if part.len() > 1 && part.starts_with('0') {
+        (&part[1..], 8)
+    } else {
+        (part, 10)
+    };
+    if digits.is_empty() {
+        return Some(0);
+    }
+    let valid_digits = match radix {
+        8 => digits.chars().all(|ch| matches!(ch, '0'..='7')),
+        10 => digits.chars().all(|ch| ch.is_ascii_digit()),
+        16 => digits.chars().all(|ch| ch.is_ascii_hexdigit()),
+        _ => false,
+    };
+    if !valid_digits {
+        return None;
+    }
+    u64::from_str_radix(digits, radix).ok()
+}
+
+fn is_documentation_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            (a == 192 && b == 0 && c == 2)
+                || (a == 198 && b == 51 && c == 100)
+                || (a == 203 && b == 0 && c == 113)
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ipv4_mapped_ipv6(ip) {
+                return is_documentation_ip(IpAddr::V4(mapped));
+            }
+            let segments = ip.segments();
+            segments[0] == 0x2001 && segments[1] == 0x0db8
+        }
+    }
+}
+
+fn is_private_like_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000)
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ipv4_mapped_ipv6(ip) {
+                return is_private_like_ip(IpAddr::V4(mapped));
+            }
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+fn ipv4_mapped_ipv6(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = ip.segments();
+    if segments[..5] == [0, 0, 0, 0, 0] && segments[5] == 0xffff {
+        Some(Ipv4Addr::new(
+            (segments[6] >> 8) as u8,
+            segments[6] as u8,
+            (segments[7] >> 8) as u8,
+            segments[7] as u8,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Parse simple static hosting header files with `Name: value` lines.
+///
+/// Blank lines and lines beginning with `#` are ignored. Malformed lines are
+/// skipped so products can decide whether to fail separately.
+#[must_use]
+pub fn parse_static_headers(input: &str) -> Vec<StaticHeader> {
+    input
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (name, value) = line.split_once(':')?;
+            let name = name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some(StaticHeader {
+                name: name.to_owned(),
+                value: value.trim().to_owned(),
+            })
+        })
+        .collect()
 }
 
 /// Return whether a public config key/value pair looks secret-like.
@@ -330,11 +655,86 @@ mod tests {
             EnvKind::Production
         )
         .is_err());
+        assert!(validate_public_url(
+            "PUBLIC_WEB_BASE",
+            "https://[not-ip]",
+            PublicUrlKind::Http,
+            EnvKind::Production
+        )
+        .is_err());
     }
 
     #[test]
     fn public_config_rejects_secret_like_entries() {
         assert!(validate_public_config_safe([("PUBLIC_WEB_BASE", "https://example.com")]).is_ok());
         assert!(validate_public_config_safe([("STRIPE_SECRET_KEY", "sk_live_x")]).is_err());
+    }
+
+    #[test]
+    fn production_host_policy_rejects_local_and_placeholder_hosts() {
+        for value in [
+            "https://localhost",
+            "https://127.0.0.1",
+            "https://10.0.0.1",
+            "https://[::1]",
+            "https://[::ffff:127.0.0.1]",
+            "https://[::ffff:10.0.0.1]",
+            "https://[::ffff:7f00:1]",
+            "https://127.1",
+            "https://10.1",
+            "https://2130706433",
+            "https://0x7f000001",
+            "https://0177.1",
+            "https://example.com",
+            "https://app.invalid",
+            "https://192.0.2.1",
+            "https://198.51.100.1",
+            "https://203.0.113.1",
+            "https://[2001:db8::1]",
+            "https://[::ffff:192.0.2.1]",
+        ] {
+            assert!(
+                validate_public_url_with_host_policy(
+                    "PUBLIC_WEB_BASE",
+                    value,
+                    PublicUrlKind::Http,
+                    EnvKind::Production,
+                    HostPolicy::production(),
+                )
+                .is_err(),
+                "{value} should be rejected"
+            );
+        }
+        assert!(validate_public_url_with_host_policy(
+            "PUBLIC_WEB_BASE",
+            "https://airlinevibe.com",
+            PublicUrlKind::Http,
+            EnvKind::Production,
+            HostPolicy::production(),
+        )
+        .is_ok());
+        assert!(validate_public_url_with_host_policy(
+            "PUBLIC_WEB_BASE",
+            "https://123.airlinevibe.com",
+            PublicUrlKind::Http,
+            EnvKind::Production,
+            HostPolicy::production(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn static_header_files_parse_name_value_lines() {
+        let headers = parse_static_headers(
+            r#"
+# comment
+Content-Security-Policy: default-src 'self'
+X-Frame-Options: DENY
+malformed
+"#,
+        );
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].name, "Content-Security-Policy");
+        assert_eq!(headers[0].value, "default-src 'self'");
     }
 }

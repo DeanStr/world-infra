@@ -25,6 +25,25 @@ pub enum NotificationItemState {
 }
 
 impl NotificationItemState {
+    /// Derive item state from common product-owned boolean flags.
+    ///
+    /// When multiple flags are true, terminal/action states take precedence
+    /// over read state in this order: expired, done, dismissed, read, unread.
+    #[must_use]
+    pub const fn from_flags(read: bool, dismissed: bool, done: bool, expired: bool) -> Self {
+        if expired {
+            Self::Expired
+        } else if done {
+            Self::Done
+        } else if dismissed {
+            Self::Dismissed
+        } else if read {
+            Self::Read
+        } else {
+            Self::Unread
+        }
+    }
+
     /// Return whether a recurring deduped notification should reopen.
     #[must_use]
     pub const fn should_reopen_on_recurrence(self) -> bool {
@@ -32,6 +51,58 @@ impl NotificationItemState {
             self,
             Self::Read | Self::Dismissed | Self::Done | Self::Expired
         )
+    }
+}
+
+/// Product-neutral effects a product adapter should apply when reopening a
+/// deduped notification item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NotificationReopenEffects {
+    /// Next delivery version to persist.
+    pub next_delivery_version: DeliveryVersion,
+    /// Clear any read marker on the existing item.
+    pub clear_read: bool,
+    /// Clear any dismissal marker on the existing item.
+    pub clear_dismissed: bool,
+    /// Clear any completed/done marker on the existing item.
+    pub clear_done: bool,
+    /// Clear any expired marker/expiry state on the existing item.
+    pub clear_expired: bool,
+    /// Clear product-owned broadcast/fanout state before re-enqueueing.
+    ///
+    /// Product adapters should treat this as covering `broadcasted_at`,
+    /// broadcast claim token/worker fields, claim expiry, and equivalent
+    /// product-local state that would otherwise prevent fanout after reopen.
+    pub clear_broadcast_state: bool,
+}
+
+impl NotificationReopenEffects {
+    /// Construct the standard reopen effects for an already-computed next
+    /// delivery version.
+    #[must_use]
+    pub const fn from_next_delivery_version(next_delivery_version: DeliveryVersion) -> Self {
+        Self {
+            next_delivery_version,
+            clear_read: true,
+            clear_dismissed: true,
+            clear_done: true,
+            clear_expired: true,
+            clear_broadcast_state: true,
+        }
+    }
+
+    /// Construct the standard reopen effects for a current delivery version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`notification_core::NotificationError`] if the next delivery
+    /// version would overflow.
+    pub fn new(
+        current_delivery_version: DeliveryVersion,
+    ) -> Result<Self, notification_core::NotificationError> {
+        Ok(Self::from_next_delivery_version(
+            current_delivery_version.next()?,
+        ))
     }
 }
 
@@ -48,6 +119,21 @@ pub enum RecurrenceDecision {
     },
     /// Create a new notification row.
     CreateNew,
+}
+
+impl RecurrenceDecision {
+    /// Return standard reopen effects for a reopen decision.
+    #[must_use]
+    pub const fn reopen_effects(self) -> Option<NotificationReopenEffects> {
+        match self {
+            Self::Reopen {
+                next_delivery_version,
+            } => Some(NotificationReopenEffects::from_next_delivery_version(
+                next_delivery_version,
+            )),
+            Self::UpdateOpenRow | Self::CreateNew => None,
+        }
+    }
 }
 
 /// Decide what to do when an event recurs.
@@ -68,12 +154,8 @@ pub fn recurrence_decision(
         return Ok(RecurrenceDecision::CreateNew);
     }
     if state.should_reopen_on_recurrence() {
-        let next = current_delivery_version
-            .as_i32()
-            .checked_add(1)
-            .ok_or(notification_core::NotificationError::InvalidDeliveryVersion)?;
         return Ok(RecurrenceDecision::Reopen {
-            next_delivery_version: DeliveryVersion::new(next)?,
+            next_delivery_version: current_delivery_version.next()?,
         });
     }
     Ok(RecurrenceDecision::UpdateOpenRow)
@@ -152,6 +234,64 @@ mod tests {
             RecurrenceDecision::Reopen {
                 next_delivery_version: DeliveryVersion::new(3).unwrap()
             }
+        );
+        assert_eq!(
+            decision.reopen_effects(),
+            Some(NotificationReopenEffects {
+                next_delivery_version: DeliveryVersion::new(3).unwrap(),
+                clear_read: true,
+                clear_dismissed: true,
+                clear_done: true,
+                clear_expired: true,
+                clear_broadcast_state: true,
+            })
+        );
+    }
+
+    #[test]
+    fn recurring_expired_notification_reopens_and_clears_expired_state() {
+        let decision = recurrence_decision(
+            true,
+            Some(NotificationItemState::Expired),
+            DeliveryVersion::new(4).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            RecurrenceDecision::Reopen {
+                next_delivery_version: DeliveryVersion::new(5).unwrap()
+            }
+        );
+        assert_eq!(
+            decision.reopen_effects(),
+            Some(NotificationReopenEffects {
+                next_delivery_version: DeliveryVersion::new(5).unwrap(),
+                clear_read: true,
+                clear_dismissed: true,
+                clear_done: true,
+                clear_expired: true,
+                clear_broadcast_state: true,
+            })
+        );
+    }
+
+    #[test]
+    fn item_state_can_be_derived_from_product_flags() {
+        assert_eq!(
+            NotificationItemState::from_flags(false, false, false, false),
+            NotificationItemState::Unread
+        );
+        assert_eq!(
+            NotificationItemState::from_flags(true, false, false, false),
+            NotificationItemState::Read
+        );
+        assert_eq!(
+            NotificationItemState::from_flags(true, true, false, false),
+            NotificationItemState::Dismissed
+        );
+        assert_eq!(
+            NotificationItemState::from_flags(true, true, true, true),
+            NotificationItemState::Expired
         );
     }
 

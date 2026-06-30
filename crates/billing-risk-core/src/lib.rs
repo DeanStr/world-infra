@@ -142,11 +142,40 @@ pub enum BillingRiskEventKind {
 #[non_exhaustive]
 pub enum WebhookIngestDisposition {
     /// Acknowledge the provider event.
+    #[deprecated(note = "use AckApplied, AckDuplicate, or AckIgnored")]
     Ack,
     /// Ask provider to retry because local state was not durably applied.
     Retry,
     /// Ignore the event as duplicate or irrelevant.
+    #[deprecated(note = "use AckDuplicate or AckIgnored")]
     Ignore,
+    /// Acknowledge because the event was durably applied.
+    AckApplied,
+    /// Acknowledge because the event was already ingested/applied.
+    AckDuplicate,
+    /// Acknowledge because the event is intentionally irrelevant locally.
+    AckIgnored,
+}
+
+impl WebhookIngestDisposition {
+    /// Return whether this disposition should acknowledge the provider event.
+    ///
+    /// Duplicate and intentionally ignored events are still acknowledged so
+    /// providers do not retry events that were safely classified locally.
+    #[must_use]
+    #[allow(deprecated)]
+    pub const fn should_ack_provider(self) -> bool {
+        matches!(
+            self,
+            Self::Ack | Self::AckApplied | Self::AckDuplicate | Self::AckIgnored | Self::Ignore
+        )
+    }
+
+    /// Return whether the provider should retry the webhook later.
+    #[must_use]
+    pub const fn should_retry_provider(self) -> bool {
+        matches!(self, Self::Retry)
+    }
 }
 
 /// Classify common webhook persistence outcomes.
@@ -157,9 +186,9 @@ pub const fn classify_webhook_persistence(
     applied: bool,
 ) -> WebhookIngestDisposition {
     if duplicate {
-        WebhookIngestDisposition::Ignore
+        WebhookIngestDisposition::AckDuplicate
     } else if persisted && applied {
-        WebhookIngestDisposition::Ack
+        WebhookIngestDisposition::AckApplied
     } else {
         WebhookIngestDisposition::Retry
     }
@@ -257,8 +286,12 @@ mod tests {
         );
         assert_eq!(
             classify_webhook_persistence(true, false, false),
-            WebhookIngestDisposition::Ignore
+            WebhookIngestDisposition::AckDuplicate
         );
+        assert!(WebhookIngestDisposition::AckIgnored.should_ack_provider());
+        assert!(!WebhookIngestDisposition::AckIgnored.should_retry_provider());
+        assert!(WebhookIngestDisposition::Retry.should_retry_provider());
+        assert!(!WebhookIngestDisposition::Retry.should_ack_provider());
     }
 
     #[test]

@@ -156,6 +156,20 @@ impl DeliveryVersion {
     pub const fn as_i32(self) -> i32 {
         self.0
     }
+
+    /// Return the next delivery version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationError::InvalidDeliveryVersion`] if incrementing
+    /// would overflow the positive i32 version type.
+    pub fn next(self) -> Result<Self, NotificationError> {
+        let next = self
+            .0
+            .checked_add(1)
+            .ok_or(NotificationError::InvalidDeliveryVersion)?;
+        Self::new(next)
+    }
 }
 
 impl fmt::Display for DeliveryVersion {
@@ -569,7 +583,19 @@ mod tests {
     fn validates_delivery_version() {
         assert_eq!(DeliveryVersion::from_i32(2).unwrap().as_i32(), 2);
         assert_eq!(
+            DeliveryVersion::from_i32(2)
+                .unwrap()
+                .next()
+                .unwrap()
+                .as_i32(),
+            3
+        );
+        assert_eq!(
             DeliveryVersion::from_i32(0),
+            Err(NotificationError::InvalidDeliveryVersion)
+        );
+        assert_eq!(
+            DeliveryVersion::from_i32(i32::MAX).unwrap().next(),
             Err(NotificationError::InvalidDeliveryVersion)
         );
         assert_eq!(
