@@ -7,26 +7,27 @@ Scope: post-Phase 7 reassessment across `/home/dean/world-infra`,
 
 Current baseline:
 
-- Phase 7 release tag: `world-infra-v0.1.0-rc.16`
-- Tagged source: `e14079153a0c84043087e9d2fa3be6afcce70186`
-- Airline canary: `4cf108b5bc276c1d9ce7bb0ca9e416af7915cd88`
-- Chairman canary: `7156d695857a951d807ad7dc2fd2dcb430979258`
+- Phase 8 maintenance release tag: `world-infra-v0.1.0-rc.17`
+- Tagged source: `87a8bbc90f6b397c9a3dcebf2ac959fb9ab0a872`
+- Airline rc17 pin: `cbf8a02ff`
+- Chairman rc17 pin: `3fdd004`
 
 `world-infra-v0.1.0-rc.16` has no shared crate-code delta over the Phase 6
 crate source consumed by products. It records Phase 7 RFC/test-mapping evidence
-only, so the product evidence above remains the `world-infra-v0.1.0-rc.15`
-consumer canaries.
+only, so the Phase 7 product evidence remained the
+`world-infra-v0.1.0-rc.15` consumer canaries.
 
-Post-`rc.16` maintenance fixes:
+`world-infra-v0.1.0-rc.17` is the Phase 8 maintenance release consumed by both
+products. It includes:
 
 - `815e3bff27ffcab4b8813594b41467f8a8b77dac` fixes fractional
   rate-limit windows and local release packaging patches.
 - `53a232e541640122f66effd03058000787379a4e` exposes default
   Testcontainers service ports.
+- `87a8bbc90f6b397c9a3dcebf2ac959fb9ab0a872` clarifies Phase 8 scope.
 
 These are correctness and release-hygiene fixes to existing shared crates, not
-Phase 8 extraction work. They should be covered by a follow-up maintenance
-release candidate before any product pin refresh.
+Phase 8 extraction work.
 
 ## Recommendation
 
@@ -128,3 +129,60 @@ Phase 8 is complete when:
   "later" language.
 - CI evidence is recorded for `world-infra`, Chairman, and Airline if any repo
   changes during the phase.
+
+## Completed Phase 8 Evidence
+
+Phase 8 completed as product-first hardening and release hygiene, with no new
+shared crate.
+
+Chairman recovery matrix:
+
+| Gap | Evidence | Decision |
+| --- | --- | --- |
+| Stale cycle job reclaim | `crates/chairman-game-db/src/admin/repair.rs` counts stale finalizing clocks, failed cycle jobs, and stale running cycle jobs before applying repair. Apply releases stale clocks and requeues failed/stale jobs with an operator-visible error marker. | Existing repair path is sufficient for Phase 8; keep shared SQL deferred. |
+| Stuck phase state | `crates/chairman-game-db/src/rules/persistence/cycle_events.rs` upserts phase completion by `(cycle_job_id, phase)`, preserves first `completed_at`, and uses stable phase idempotency keys. | Characterized as product-owned SQL; no shared extraction. |
+| Repair dry-run/apply visibility | `AdminCycleRepairReport` returns candidate counts, mutation counts, `dry_run`, and warnings. Dry run mutates no rows; apply reports released/requeued counts. | Existing operator report is the Phase 8 surface. |
+| Outbox drain idempotency | Chairman now has focused tests around the drain SQL: it only claims `delivered_at is null` rows, uses `for update skip locked`, and marks delivery with `delivered_at = now()`. | Characterized locally; no shared outbox SQL crate. |
+| External-alert lease expiry | Chairman now has focused tests proving claim/count SQL includes expired `sending` leases, prioritizes stale sending rows, uses `skip locked`, and records reclaimed leases. | Product-owned external-alert leasing is sufficient for Phase 8. |
+| Retry exhaustion reporting | `apps/chairman-worker/src/main.rs` covers bounded retry/backoff and terminal exhaustion; `apps/chairman-worker/src/delivery_utils.rs` keeps Chairman's max-attempt policy product-owned. | No shared provider terminal policy adoption. |
+| Ambiguous-after-side-effect handling | `ExternalAlertDeliveryFinalizer` maps ambiguous-after-side-effect outcomes to terminal failure with explicit error text rather than silent retry. | Conservative local policy retained. |
+| Worker run report/operator visibility | `CycleRunReport`, `OutboxDeliveryRunReport`, `ExternalAlertDeliveryRunReport`, admin audit reports, and worker logs expose cycle, outbox, and delivery counts. | Existing reports satisfy Phase 8 operator visibility. |
+
+Airline comparison evidence:
+
+- Airline keeps the mature incarnation-aware cycle recovery and follow-up retry
+  model documented in `/home/dean/airline/docs/cycle-crash-recovery.md`.
+- Airline remains the reference for future SQL RFCs, especially run leases,
+  phase replay safety, durable follow-up rows, and ambiguous-after-side-effect
+  reconciliation.
+- No Airline behavior change was needed in Phase 8 beyond pinning the shared
+  maintenance release.
+
+Shared extraction decision:
+
+- `world-cycle-sqlx`, `world-followup-sqlx`, runtime idempotency backends,
+  event-fanout transports, broad `world-db-sqlx` helpers, and ledger helpers
+  remain deferred.
+- No SQLSTATE/error classification helper was extracted; Phase 8 did not reveal
+  two identical product call sites with matching failure semantics.
+
+Local verification:
+
+- world-infra:
+  `cargo test -p rate-limit-core`;
+  `cargo test -p world-test-containers --all-features`.
+- Chairman:
+  `cargo check -p chairman-api -p chairman-worker -p chairman-game-db`;
+  `cargo test -p chairman-game-db external_alert_`;
+  `cargo test -p chairman-game-db outbox_drain_is_idempotent_for_delivered_rows`.
+- Airline:
+  `cargo check -p airline-utils -p loco-app -p sim-engine`.
+
+Release and pin evidence:
+
+- `world-infra-v0.1.0-rc.17`:
+  `87a8bbc90f6b397c9a3dcebf2ac959fb9ab0a872`.
+- Chairman rc17 pin:
+  `3fdd004`.
+- Airline rc17 pin:
+  `cbf8a02ff`.
