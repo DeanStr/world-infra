@@ -65,4 +65,11 @@ The current implementation/readiness state is recorded in:
 
 - `docs/phase-0-3-readiness-audit.md`;
 - `docs/phase-4-readiness-audit.md`;
-- `docs/phase-5-reassessment-audit.md`.
+- `docs/phase-5-reassessment-audit.md`;
+- `docs/phase-6-candidate-audit.md`;
+- `docs/phase-7-candidate-audit.md`;
+- `docs/phase-8-candidate-audit.md`.
+
+The numbered extraction plan is closed through Phase 8. Future shared work
+should start as concrete backlog items, candidate audits, or narrow RFCs rather
+than as a Phase 9 by default.

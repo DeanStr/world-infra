@@ -42,6 +42,9 @@ spike; release candidates still require both-product approval.
 | `delivery-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman external alerts | Airline notification owner |
 | `world-event-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman outbox canary | Airline cycle-event canary |
 | `notification-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline notification delivery | Chairman external alerts |
+| `world-test-containers` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman DB tests | Airline test platform owner |
+| `event-fanout` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline event fanout canary | Chairman worker/event owner |
+| `world-cycle-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman cycle canary | Airline cycle owner |
 
 ## Boundaries
 
