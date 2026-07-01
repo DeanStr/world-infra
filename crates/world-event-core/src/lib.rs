@@ -398,12 +398,12 @@ mod tests {
             durability: DurabilityBoundary::PublishAccepted,
         };
 
-        let envelope = EventEnvelope::from_parts(metadata, ());
+        let envelope = EventEnvelope::from_parts(metadata, "payload");
         let (metadata, payload) = envelope.into_parts();
         assert_eq!(
             metadata.world.incarnation_label(),
             "world:1:incarnation:instance-1"
         );
-        assert_eq!(payload, ());
+        assert_eq!(payload, "payload");
     }
 }

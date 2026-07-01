@@ -145,7 +145,11 @@ fn validate_part(value: &str) -> Result<&str, IdempotencyRuntimeError> {
 }
 
 fn ttl_duration(ttl: Duration) -> Duration {
-    ttl.max(Duration::from_millis(1))
+    if ttl.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        ttl
+    }
 }
 
 #[cfg(feature = "redis")]
@@ -869,19 +873,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_memory_zero_ttl_is_clamped_to_a_short_positive_ttl() {
+    async fn in_memory_zero_ttl_uses_durable_minimum_ttl() {
         let store = InMemoryIdempotencyStore::new();
         assert!(store.set_once("zero", Duration::ZERO).await.unwrap());
+        std::thread::sleep(Duration::from_millis(5));
         assert!(store.exists("zero").await.unwrap());
-        let mut expired = false;
-        for _ in 0..20 {
-            std::thread::sleep(Duration::from_millis(5));
-            if !store.exists("zero").await.unwrap() {
-                expired = true;
-                break;
-            }
-        }
-        assert!(expired);
+        assert_eq!(
+            store
+                .claim_pending("zero", Duration::from_secs(5))
+                .await
+                .unwrap(),
+            WorkClaim::Completed
+        );
     }
 
     #[cfg(feature = "redis")]

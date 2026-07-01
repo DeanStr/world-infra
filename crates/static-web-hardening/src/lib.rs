@@ -252,6 +252,7 @@ fn validate_public_url_base(
         || remainder.is_empty()
         || remainder.starts_with('/')
         || remainder.contains('@')
+        || remainder.contains('\\')
         || remainder
             .chars()
             .any(|ch| ch.is_whitespace() || ch.is_control())
@@ -303,7 +304,7 @@ fn authority_host(remainder: &str) -> Option<&str> {
     if parts.next().is_some() {
         return None;
     }
-    if host.starts_with('.') || host.ends_with('.') {
+    if !valid_unbracketed_host(host) {
         return None;
     }
     if let Some(port) = port {
@@ -312,6 +313,25 @@ fn authority_host(remainder: &str) -> Option<&str> {
         }
     }
     Some(host)
+}
+
+fn valid_unbracketed_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && !host.contains("..")
+        && host.split('.').all(valid_host_label)
+}
+
+fn valid_host_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn valid_port(port: &str) -> bool {
@@ -789,6 +809,59 @@ mod tests {
             HostPolicy::production(),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn public_urls_reject_backslash_authority_ambiguity() {
+        for value in [
+            "https://127.0.0.1\\app",
+            "https://localhost\\app",
+            "https://airlinevibe.com\\app",
+        ] {
+            assert!(
+                matches!(
+                    validate_public_url_with_host_policy(
+                        "PUBLIC_WEB_BASE",
+                        value,
+                        PublicUrlKind::Http,
+                        EnvKind::Production,
+                        HostPolicy::production(),
+                    ),
+                    Err(StaticWebUrlPolicyError::Url(
+                        StaticWebError::InvalidUrl { .. }
+                    ))
+                ),
+                "{value} should be rejected as an invalid URL"
+            );
+        }
+    }
+
+    #[test]
+    fn public_urls_reject_malformed_unbracketed_hosts() {
+        for value in [
+            "https://exa[mple.com",
+            "https://exa]mple.com",
+            "https://a..b.example",
+            "https://-a.example",
+            "https://a-.example",
+            "https://a_b.example",
+        ] {
+            assert!(
+                matches!(
+                    validate_public_url_with_host_policy(
+                        "PUBLIC_WEB_BASE",
+                        value,
+                        PublicUrlKind::Http,
+                        EnvKind::Production,
+                        HostPolicy::production(),
+                    ),
+                    Err(StaticWebUrlPolicyError::Url(
+                        StaticWebError::InvalidUrl { .. }
+                    ))
+                ),
+                "{value} should be rejected as an invalid URL"
+            );
+        }
     }
 
     #[test]

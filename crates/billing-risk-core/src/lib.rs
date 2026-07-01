@@ -226,13 +226,19 @@ impl SupportMessageRef {
 
 /// Default sensitive provider-snapshot keys to redact.
 pub const DEFAULT_SENSITIVE_KEYS: &[&str] = &[
+    "access_token",
+    "api_key",
     "authorization",
     "client_secret",
     "cvc",
+    "id_token",
     "number",
     "password",
+    "refresh_token",
     "secret",
+    "secret_key",
     "token",
+    "webhook_secret",
 ];
 
 /// Redact sensitive JSON object keys recursively.
@@ -242,10 +248,7 @@ pub fn redact_json_snapshot(value: &Value, sensitive_keys: &[&str]) -> Value {
         Value::Object(map) => {
             let mut redacted = serde_json::Map::new();
             for (key, value) in map {
-                if sensitive_keys
-                    .iter()
-                    .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
-                {
+                if is_sensitive_snapshot_key(key, sensitive_keys) {
                     redacted.insert(key.clone(), Value::String("[redacted]".to_owned()));
                 } else {
                     redacted.insert(key.clone(), redact_json_snapshot(value, sensitive_keys));
@@ -261,6 +264,51 @@ pub fn redact_json_snapshot(value: &Value, sensitive_keys: &[&str]) -> Value {
         ),
         _ => value.clone(),
     }
+}
+
+fn is_sensitive_snapshot_key(key: &str, sensitive_keys: &[&str]) -> bool {
+    let key = normalize_snapshot_key(key);
+    sensitive_keys.iter().any(|sensitive| {
+        let sensitive = normalize_snapshot_key(sensitive);
+        !sensitive.is_empty()
+            && (key == sensitive
+                || key
+                    .strip_suffix(&sensitive)
+                    .is_some_and(|prefix| prefix.ends_with('_')))
+    })
+}
+
+fn normalize_snapshot_key(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut previous_was_lower_or_digit = false;
+    let mut previous_was_uppercase = false;
+    let chars = value.chars().collect::<Vec<_>>();
+    for (index, ch) in chars.iter().copied().enumerate() {
+        if ch.is_ascii_uppercase() {
+            let next_is_lowercase = chars
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_lowercase());
+            if (previous_was_lower_or_digit || (previous_was_uppercase && next_is_lowercase))
+                && !normalized.ends_with('_')
+            {
+                normalized.push('_');
+            }
+            normalized.push(ch.to_ascii_lowercase());
+            previous_was_lower_or_digit = false;
+            previous_was_uppercase = true;
+        } else if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            normalized.push(ch.to_ascii_lowercase());
+            previous_was_lower_or_digit = true;
+            previous_was_uppercase = false;
+        } else {
+            if !normalized.is_empty() && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            previous_was_lower_or_digit = false;
+            previous_was_uppercase = false;
+        }
+    }
+    normalized.trim_matches('_').to_owned()
 }
 
 /// Checkout-time evidence skeleton shared by products.
@@ -313,10 +361,32 @@ mod tests {
     fn redacts_nested_sensitive_json_keys() {
         let value = serde_json::json!({
             "id": "evt_1",
-            "data": { "client_secret": "secret", "nested": [{ "token": "abc" }] }
+            "data": {
+                "access_token": "access",
+                "refreshToken": "refresh",
+                "APIKey": "api",
+                "IDToken": "id",
+                "client_secret": "secret",
+                "metadata": {
+                    "provider_secret_key": "provider-secret",
+                    "providerAPIKey": "provider-api"
+                },
+                "safe_tokenized_count": 2,
+                "nested": [{ "token": "abc" }]
+            }
         });
         let redacted = redact_json_snapshot(&value, DEFAULT_SENSITIVE_KEYS);
+        assert_eq!(redacted["data"]["access_token"], "[redacted]");
+        assert_eq!(redacted["data"]["refreshToken"], "[redacted]");
+        assert_eq!(redacted["data"]["APIKey"], "[redacted]");
+        assert_eq!(redacted["data"]["IDToken"], "[redacted]");
         assert_eq!(redacted["data"]["client_secret"], "[redacted]");
+        assert_eq!(
+            redacted["data"]["metadata"]["provider_secret_key"],
+            "[redacted]"
+        );
+        assert_eq!(redacted["data"]["metadata"]["providerAPIKey"], "[redacted]");
+        assert_eq!(redacted["data"]["safe_tokenized_count"], 2);
         assert_eq!(redacted["data"]["nested"][0]["token"], "[redacted]");
     }
 
