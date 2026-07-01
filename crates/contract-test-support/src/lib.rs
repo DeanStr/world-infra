@@ -226,6 +226,176 @@ pub fn with_unknown_top_level_field(value: &Value, field: &str) -> Value {
     value
 }
 
+/// Look up an OpenAPI operation by exact path key and method name.
+///
+/// This intentionally does not use dot-path lookup because OpenAPI path keys
+/// contain slashes and braces, such as `/worlds/{worldId}`.
+///
+/// # Errors
+///
+/// Returns [`ContractTestError::MissingPath`] when the path or method is absent.
+/// Returns [`ContractTestError::ExpectedObject`] when `paths`, the path item, or
+/// the method operation is not an object.
+pub fn operation_at(
+    document: &Value,
+    path: impl AsRef<str>,
+    method: impl AsRef<str>,
+) -> Result<&Value, ContractTestError> {
+    let path = path.as_ref();
+    let method = method.as_ref().to_ascii_lowercase();
+    let paths = document
+        .get("paths")
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: "paths".to_owned(),
+        })?
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "paths".to_owned(),
+        })?;
+    let path_item = paths
+        .get(path)
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: format!("paths.{path}"),
+        })?
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: format!("paths.{path}"),
+        })?;
+    let operation = path_item
+        .get(&method)
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: format!("paths.{path}.{method}"),
+        })?;
+    if operation.is_object() {
+        Ok(operation)
+    } else {
+        Err(ContractTestError::ExpectedObject {
+            path: format!("paths.{path}.{method}"),
+        })
+    }
+}
+
+/// Return sorted response codes from an OpenAPI operation.
+///
+/// # Errors
+///
+/// Returns [`ContractTestError::MissingPath`] when `responses` is absent.
+/// Returns [`ContractTestError::ExpectedObject`] when the operation or
+/// `responses` is not an object.
+pub fn response_codes(operation: &Value) -> Result<Vec<&str>, ContractTestError> {
+    let operation = operation
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "operation".to_owned(),
+        })?;
+    let responses = operation
+        .get("responses")
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: "responses".to_owned(),
+        })?
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "responses".to_owned(),
+        })?;
+    let mut codes = responses.keys().map(String::as_str).collect::<Vec<_>>();
+    codes.sort_unstable();
+    Ok(codes)
+}
+
+/// Assert an OpenAPI operation declares a response code.
+///
+/// # Errors
+///
+/// Returns [`ContractTestError::MissingPath`] when the code is absent.
+pub fn assert_response_code(
+    operation: &Value,
+    status: impl AsRef<str>,
+) -> Result<(), ContractTestError> {
+    let status = status.as_ref();
+    if response_codes(operation)?.contains(&status) {
+        return Ok(());
+    }
+    Err(ContractTestError::MissingPath {
+        path: format!("responses.{status}"),
+    })
+}
+
+/// Assert an OpenAPI operation description contains expected text.
+///
+/// # Errors
+///
+/// Returns [`ContractTestError::JsonMismatch`] when the description is missing
+/// or does not contain `text`.
+pub fn assert_description_contains(
+    operation: &Value,
+    text: impl AsRef<str>,
+) -> Result<(), ContractTestError> {
+    let text = text.as_ref();
+    let actual = operation
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "operation".to_owned(),
+        })?
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if actual.contains(text) {
+        return Ok(());
+    }
+    Err(ContractTestError::JsonMismatch {
+        expected: format!("description containing {text:?}"),
+        actual: actual.to_owned(),
+    })
+}
+
+/// Assert an OpenAPI response description contains expected text.
+///
+/// # Errors
+///
+/// Returns [`ContractTestError::MissingPath`] when the response code is absent.
+/// Returns [`ContractTestError::JsonMismatch`] when the response description is
+/// missing or does not contain `text`.
+pub fn assert_response_description_contains(
+    operation: &Value,
+    status: impl AsRef<str>,
+    text: impl AsRef<str>,
+) -> Result<(), ContractTestError> {
+    let status = status.as_ref();
+    let text = text.as_ref();
+    let response = operation
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "operation".to_owned(),
+        })?
+        .get("responses")
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: "responses".to_owned(),
+        })?
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "responses".to_owned(),
+        })?
+        .get(status)
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: format!("responses.{status}"),
+        })?
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: format!("responses.{status}"),
+        })?;
+    let actual = response
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if actual.contains(text) {
+        return Ok(());
+    }
+    Err(ContractTestError::JsonMismatch {
+        expected: format!("responses.{status}.description containing {text:?}"),
+        actual: actual.to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +470,56 @@ mod tests {
         assert_eq!(
             with_unknown_top_level_field(&value, "extra")["extra"],
             Value::String("unexpected".to_owned())
+        );
+    }
+
+    #[test]
+    fn openapi_operation_helpers_use_exact_path_keys() {
+        let document = parse_json(
+            r#"{
+                "paths": {
+                    "/worlds/{worldId}/clock": {
+                        "get": {
+                            "description": "Bearer auth is required.",
+                            "responses": {
+                                "200": { "description": "Clock payload." },
+                                "401": { "description": "Unauthorized." },
+                                "403": { "description": "Forbidden." }
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let operation = operation_at(&document, "/worlds/{worldId}/clock", "GET").unwrap();
+
+        assert_eq!(
+            response_codes(operation).unwrap(),
+            vec!["200", "401", "403"]
+        );
+        assert_response_code(operation, "401").unwrap();
+        assert_description_contains(operation, "Bearer auth").unwrap();
+        assert_response_description_contains(operation, "403", "Forbidden").unwrap();
+        assert_eq!(
+            assert_response_code(operation, "404"),
+            Err(ContractTestError::MissingPath {
+                path: "responses.404".to_owned()
+            })
+        );
+        assert!(assert_description_contains(operation, "session").is_err());
+        assert!(operation_at(&document, "/missing", "get").is_err());
+        assert_eq!(
+            response_codes(&Value::String("not-an-operation".to_owned())),
+            Err(ContractTestError::ExpectedObject {
+                path: "operation".to_owned()
+            })
+        );
+        assert_eq!(
+            assert_response_code(&parse_json(r#"{"responses":[]}"#).unwrap(), "200"),
+            Err(ContractTestError::ExpectedObject {
+                path: "responses".to_owned()
+            })
         );
     }
 }

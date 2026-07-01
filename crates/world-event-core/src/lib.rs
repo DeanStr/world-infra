@@ -6,7 +6,7 @@
 
 use std::{error::Error, fmt, str::FromStr, time::SystemTime};
 
-use idempotency_core::IdempotencyKey;
+use idempotency_core::{IdempotencyKey, KeyError};
 use world_identity_core::WorldRef;
 
 const MAX_EVENT_ID_LEN: usize = 256;
@@ -42,6 +42,16 @@ pub enum EventMetadataError {
     },
     /// Schema version zero is invalid.
     ZeroSchemaVersion,
+    /// A required builder field was not provided.
+    MissingRequired {
+        /// Metadata field name.
+        field: &'static str,
+    },
+    /// Idempotency key validation failed.
+    InvalidIdempotencyKey {
+        /// Underlying idempotency key error.
+        error: KeyError,
+    },
 }
 
 impl fmt::Display for EventMetadataError {
@@ -55,11 +65,26 @@ impl fmt::Display for EventMetadataError {
                 write!(f, "{field} contains invalid character {ch:?}")
             }
             Self::ZeroSchemaVersion => f.write_str("schema version must be greater than zero"),
+            Self::MissingRequired { field } => write!(f, "{field} is required"),
+            Self::InvalidIdempotencyKey { error } => {
+                write!(f, "idempotency_key is invalid: {error}")
+            }
         }
     }
 }
 
-impl Error for EventMetadataError {}
+impl Error for EventMetadataError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidIdempotencyKey { error } => Some(error),
+            Self::Empty { .. }
+            | Self::TooLong { .. }
+            | Self::InvalidCharacter { .. }
+            | Self::ZeroSchemaVersion
+            | Self::MissingRequired { .. } => None,
+        }
+    }
+}
 
 fn validated_metadata(
     field: &'static str,
@@ -241,6 +266,191 @@ pub struct EventMetadata<W, I> {
     pub durability: DurabilityBoundary,
 }
 
+/// Builder for validated event metadata.
+///
+/// The builder deliberately requires products to choose the durability boundary
+/// and production timestamp. Use [`EventMetadataBuilder::produced_now`] only
+/// when wall-clock time is the intended product behavior.
+#[derive(Debug, Clone)]
+pub struct EventMetadataBuilder<W, I> {
+    event_id: EventId,
+    event_type: EventType,
+    schema_version: SchemaVersion,
+    world: WorldRef<W, I>,
+    aggregate_id: Option<AggregateId>,
+    idempotency_key: Option<IdempotencyKey>,
+    produced_at: Option<SystemTime>,
+    source: EventSource,
+    causation_id: Option<EventId>,
+    correlation_id: Option<CorrelationId>,
+    durability: Option<DurabilityBoundary>,
+}
+
+impl<W, I> EventMetadataBuilder<W, I> {
+    /// Start building event metadata from required product-owned fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError`] when any required metadata value is
+    /// invalid.
+    pub fn new(
+        world: WorldRef<W, I>,
+        event_id: impl AsRef<str>,
+        event_type: impl AsRef<str>,
+        schema_version: u32,
+        source: impl AsRef<str>,
+    ) -> Result<Self, EventMetadataError> {
+        Ok(Self {
+            event_id: EventId::new(event_id)?,
+            event_type: EventType::new(event_type)?,
+            schema_version: SchemaVersion::new(schema_version)?,
+            world,
+            aggregate_id: None,
+            idempotency_key: None,
+            produced_at: None,
+            source: EventSource::new(source)?,
+            causation_id: None,
+            correlation_id: None,
+            durability: None,
+        })
+    }
+
+    /// Set the product-owned aggregate identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError`] when the aggregate identifier is invalid.
+    pub fn aggregate_id(mut self, value: impl AsRef<str>) -> Result<Self, EventMetadataError> {
+        self.aggregate_id = Some(AggregateId::new(value)?);
+        Ok(self)
+    }
+
+    /// Set a pre-validated product-owned aggregate identifier.
+    #[must_use]
+    pub fn aggregate_id_value(mut self, value: AggregateId) -> Self {
+        self.aggregate_id = Some(value);
+        self
+    }
+
+    /// Set the durable idempotency key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError`] when the idempotency key is invalid.
+    pub fn idempotency_key(mut self, value: impl AsRef<str>) -> Result<Self, EventMetadataError> {
+        self.idempotency_key = Some(
+            IdempotencyKey::parse_new_key(value)
+                .map_err(|error| EventMetadataError::InvalidIdempotencyKey { error })?,
+        );
+        Ok(self)
+    }
+
+    /// Set a pre-validated durable idempotency key.
+    #[must_use]
+    pub fn idempotency_key_value(mut self, value: IdempotencyKey) -> Self {
+        self.idempotency_key = Some(value);
+        self
+    }
+
+    /// Set the event that caused this event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError`] when the causation identifier is invalid.
+    pub fn causation_id(mut self, value: impl AsRef<str>) -> Result<Self, EventMetadataError> {
+        self.causation_id = Some(EventId::new(value)?);
+        Ok(self)
+    }
+
+    /// Set a pre-validated causation event identifier.
+    #[must_use]
+    pub fn causation_id_value(mut self, value: EventId) -> Self {
+        self.causation_id = Some(value);
+        self
+    }
+
+    /// Set the cross-boundary correlation identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError`] when the correlation identifier is
+    /// invalid.
+    pub fn correlation_id(mut self, value: impl AsRef<str>) -> Result<Self, EventMetadataError> {
+        self.correlation_id = Some(CorrelationId::new(value)?);
+        Ok(self)
+    }
+
+    /// Set a pre-validated cross-boundary correlation identifier.
+    #[must_use]
+    pub fn correlation_id_value(mut self, value: CorrelationId) -> Self {
+        self.correlation_id = Some(value);
+        self
+    }
+
+    /// Set the product-owned production timestamp explicitly.
+    #[must_use]
+    pub fn produced_at(mut self, value: SystemTime) -> Self {
+        self.produced_at = Some(value);
+        self
+    }
+
+    /// Set the production timestamp to [`SystemTime::now`].
+    #[must_use]
+    pub fn produced_now(self) -> Self {
+        self.produced_at(SystemTime::now())
+    }
+
+    /// Set the product-neutral durability boundary.
+    #[must_use]
+    pub fn durability(mut self, value: DurabilityBoundary) -> Self {
+        self.durability = Some(value);
+        self
+    }
+
+    /// Build the validated metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError::MissingRequired`] if `produced_at` or
+    /// `durability` was not set.
+    pub fn build(self) -> Result<EventMetadata<W, I>, EventMetadataError> {
+        let produced_at = self
+            .produced_at
+            .ok_or(EventMetadataError::MissingRequired {
+                field: "produced_at",
+            })?;
+        let durability = self.durability.ok_or(EventMetadataError::MissingRequired {
+            field: "durability",
+        })?;
+        Ok(EventMetadata {
+            event_id: self.event_id,
+            event_type: self.event_type,
+            schema_version: self.schema_version,
+            world: self.world,
+            aggregate_id: self.aggregate_id,
+            idempotency_key: self.idempotency_key,
+            produced_at,
+            source: self.source,
+            causation_id: self.causation_id,
+            correlation_id: self.correlation_id,
+            durability,
+        })
+    }
+
+    /// Build a validated envelope with product-owned payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventMetadataError::MissingRequired`] if `produced_at` or
+    /// `durability` was not set.
+    pub fn build_envelope<P>(
+        self,
+        payload: P,
+    ) -> Result<EventEnvelope<W, I, P>, EventMetadataError> {
+        Ok(EventEnvelope::from_parts(self.build()?, payload))
+    }
+}
+
 /// Generic event envelope with product-owned payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventEnvelope<W, I, P> {
@@ -405,5 +615,118 @@ mod tests {
             "world:1:incarnation:instance-1"
         );
         assert_eq!(payload, "payload");
+    }
+
+    #[test]
+    fn builder_constructs_no_incarnation_metadata_and_envelope() {
+        let world = WorldRef::new("chairman-world", NoIncarnation);
+        let envelope = EventMetadataBuilder::new(
+            world,
+            "cycle-completed:chairman-world:7",
+            "world.cycle_completed",
+            1,
+            "chairman-game-db",
+        )
+        .unwrap()
+        .aggregate_id("world_cycle:job-7")
+        .unwrap()
+        .idempotency_key("world:chairman-world:cycle-completed:7")
+        .unwrap()
+        .produced_at(UNIX_EPOCH)
+        .durability(DurabilityBoundary::DurableOutboxRecorded)
+        .build_envelope("payload")
+        .unwrap();
+
+        assert_eq!(
+            envelope.metadata.event_id.as_str(),
+            "cycle-completed:chairman-world:7"
+        );
+        assert_eq!(envelope.metadata.schema_version.get(), 1);
+        assert_eq!(
+            envelope.metadata.world.no_incarnation_label(),
+            "world:chairman-world"
+        );
+        assert_eq!(
+            envelope
+                .metadata
+                .aggregate_id
+                .as_ref()
+                .map(AggregateId::as_str),
+            Some("world_cycle:job-7")
+        );
+        assert_eq!(envelope.metadata.produced_at, UNIX_EPOCH);
+        assert_eq!(
+            envelope.metadata.durability,
+            DurabilityBoundary::DurableOutboxRecorded
+        );
+        assert_eq!(envelope.payload, "payload");
+    }
+
+    #[test]
+    fn builder_constructs_incarnation_aware_metadata() {
+        let world = WorldRef::new(1, IncarnationId("instance-1"));
+        let idempotency_key =
+            IdempotencyKey::parse_new_key("cycle_event_broadcast:world.1.instance.instance-1.2")
+                .unwrap();
+        let metadata = EventMetadataBuilder::new(
+            world,
+            "cycle-completed:1:instance-1:2",
+            "cycleCompleted",
+            2,
+            "loco-app",
+        )
+        .unwrap()
+        .idempotency_key_value(idempotency_key.clone())
+        .causation_id("finalization:1:instance-1:2")
+        .unwrap()
+        .correlation_id("world:1:instance:instance-1")
+        .unwrap()
+        .produced_at(UNIX_EPOCH)
+        .durability(DurabilityBoundary::PublishAccepted)
+        .build()
+        .unwrap();
+
+        assert_eq!(
+            metadata.world.incarnation_label(),
+            "world:1:incarnation:instance-1"
+        );
+        assert_eq!(metadata.idempotency_key, Some(idempotency_key));
+        assert_eq!(
+            metadata.causation_id.as_ref().map(EventId::as_str),
+            Some("finalization:1:instance-1:2")
+        );
+        assert_eq!(
+            metadata.correlation_id.as_ref().map(CorrelationId::as_str),
+            Some("world:1:instance:instance-1")
+        );
+        assert_eq!(metadata.durability, DurabilityBoundary::PublishAccepted);
+    }
+
+    #[test]
+    fn builder_rejects_missing_required_fields_and_invalid_keys() {
+        let world = WorldRef::new("chairman-world", NoIncarnation);
+        let builder =
+            EventMetadataBuilder::new(world, "event-1", "world.cycle_completed", 1, "source")
+                .unwrap();
+        assert_eq!(
+            builder.clone().build(),
+            Err(EventMetadataError::MissingRequired {
+                field: "produced_at"
+            })
+        );
+        assert_eq!(
+            builder.produced_at(UNIX_EPOCH).build(),
+            Err(EventMetadataError::MissingRequired {
+                field: "durability"
+            })
+        );
+
+        let world = WorldRef::new("chairman-world", NoIncarnation);
+        assert!(matches!(
+            EventMetadataBuilder::new(world, "event-1", "world.cycle_completed", 1, "source")
+                .unwrap()
+                .idempotency_key("bad key"),
+            Err(EventMetadataError::InvalidIdempotencyKey { .. })
+        ));
     }
 }
