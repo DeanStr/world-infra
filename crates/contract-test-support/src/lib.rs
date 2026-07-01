@@ -320,6 +320,59 @@ pub fn assert_response_code(
     })
 }
 
+/// Assert an OpenAPI operation requires a named security scheme.
+///
+/// OpenAPI operation `security` is an array of alternative requirement
+/// objects. This helper passes when any requirement object contains `scheme`.
+/// It does not interpret product-specific auth policy, scopes, tokens, or
+/// inherited path/global security.
+///
+/// # Errors
+///
+/// Returns [`ContractTestError::MissingPath`] when `security` or the scheme is
+/// absent. Returns [`ContractTestError::ExpectedObject`] when the operation or a
+/// security requirement item is not an object. Returns
+/// [`ContractTestError::JsonMismatch`] when `security` is present but not an
+/// array.
+pub fn assert_security_scheme_required(
+    operation: &Value,
+    scheme: impl AsRef<str>,
+) -> Result<(), ContractTestError> {
+    let scheme = scheme.as_ref();
+    let operation = operation
+        .as_object()
+        .ok_or_else(|| ContractTestError::ExpectedObject {
+            path: "operation".to_owned(),
+        })?;
+    let security = operation
+        .get("security")
+        .ok_or_else(|| ContractTestError::MissingPath {
+            path: "security".to_owned(),
+        })?;
+    let requirements = security
+        .as_array()
+        .ok_or_else(|| ContractTestError::JsonMismatch {
+            expected: format!("security array containing scheme {scheme:?}"),
+            actual: security.to_string(),
+        })?;
+
+    for requirement in requirements {
+        let requirement =
+            requirement
+                .as_object()
+                .ok_or_else(|| ContractTestError::ExpectedObject {
+                    path: "security[]".to_owned(),
+                })?;
+        if requirement.contains_key(scheme) {
+            return Ok(());
+        }
+    }
+
+    Err(ContractTestError::MissingPath {
+        path: format!("security.{scheme}"),
+    })
+}
+
 /// Assert an OpenAPI operation description contains expected text.
 ///
 /// # Errors
@@ -481,6 +534,7 @@ mod tests {
                     "/worlds/{worldId}/clock": {
                         "get": {
                             "description": "Bearer auth is required.",
+                            "security": [{ "bearerAuth": [] }],
                             "responses": {
                                 "200": { "description": "Clock payload." },
                                 "401": { "description": "Unauthorized." },
@@ -499,6 +553,7 @@ mod tests {
             vec!["200", "401", "403"]
         );
         assert_response_code(operation, "401").unwrap();
+        assert_security_scheme_required(operation, "bearerAuth").unwrap();
         assert_description_contains(operation, "Bearer auth").unwrap();
         assert_response_description_contains(operation, "403", "Forbidden").unwrap();
         assert_eq!(
@@ -519,6 +574,58 @@ mod tests {
             assert_response_code(&parse_json(r#"{"responses":[]}"#).unwrap(), "200"),
             Err(ContractTestError::ExpectedObject {
                 path: "responses".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn openapi_security_scheme_helper_checks_alternative_requirements() {
+        let operation = parse_json(
+            r#"{
+                "security": [
+                    { "apiKeyAuth": [] },
+                    { "bearerAuth": [] }
+                ],
+                "responses": {
+                    "200": { "description": "OK" }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_security_scheme_required(&operation, "bearerAuth").unwrap();
+        assert_security_scheme_required(&operation, "apiKeyAuth").unwrap();
+        assert_eq!(
+            assert_security_scheme_required(&operation, "cookieAuth"),
+            Err(ContractTestError::MissingPath {
+                path: "security.cookieAuth".to_owned()
+            })
+        );
+        assert_eq!(
+            assert_security_scheme_required(
+                &parse_json(r#"{"responses":{}}"#).unwrap(),
+                "bearerAuth"
+            ),
+            Err(ContractTestError::MissingPath {
+                path: "security".to_owned()
+            })
+        );
+        assert_eq!(
+            assert_security_scheme_required(
+                &parse_json(r#"{"security":{"bearerAuth":[]},"responses":{}}"#).unwrap(),
+                "bearerAuth",
+            ),
+            Err(ContractTestError::JsonMismatch {
+                expected: "security array containing scheme \"bearerAuth\"".to_owned(),
+                actual: r#"{"bearerAuth":[]}"#.to_owned(),
+            })
+        );
+        assert_eq!(
+            assert_security_scheme_required(
+                &parse_json(r#"{"security":["bearerAuth"],"responses":{}}"#).unwrap(),
+                "bearerAuth",
+            ),
+            Err(ContractTestError::ExpectedObject {
+                path: "security[]".to_owned()
             })
         );
     }
