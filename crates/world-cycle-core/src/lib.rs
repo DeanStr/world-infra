@@ -358,6 +358,17 @@ impl CycleRuntimeSignals {
             run_active,
         }
     }
+
+    /// Construct cycle runtime signals when the product has no attention or
+    /// recovery condition to report.
+    #[must_use]
+    pub const fn without_attention(
+        paused: bool,
+        finalizing_active: bool,
+        run_active: bool,
+    ) -> Self {
+        Self::new(false, paused, finalizing_active, run_active)
+    }
 }
 
 /// Derive a product-neutral runtime status from product-owned signals.
@@ -655,19 +666,21 @@ mod tests {
             CycleRuntimeStatus::AttentionRequired
         );
         assert_eq!(
-            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, true, true, true)),
+            derive_cycle_runtime_status(CycleRuntimeSignals::without_attention(true, true, true)),
             CycleRuntimeStatus::Paused
         );
         assert_eq!(
-            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, false, true, true)),
+            derive_cycle_runtime_status(CycleRuntimeSignals::without_attention(false, true, true)),
             CycleRuntimeStatus::Finalizing
         );
         assert_eq!(
-            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, false, false, true)),
+            derive_cycle_runtime_status(CycleRuntimeSignals::without_attention(false, false, true)),
             CycleRuntimeStatus::Running
         );
         assert_eq!(
-            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, false, false, false)),
+            derive_cycle_runtime_status(CycleRuntimeSignals::without_attention(
+                false, false, false
+            )),
             CycleRuntimeStatus::Open
         );
         assert_eq!(
