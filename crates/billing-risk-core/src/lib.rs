@@ -88,6 +88,9 @@ impl PolicyVersion {
 }
 
 fn validate_label(field: &'static str, value: &str) -> Result<String, BillingRiskError> {
+    if value.chars().any(char::is_control) {
+        return Err(BillingRiskError::Invalid { field });
+    }
     let value = value.trim();
     if value.is_empty() {
         return Err(BillingRiskError::Empty { field });
@@ -103,6 +106,9 @@ fn validate_label(field: &'static str, value: &str) -> Result<String, BillingRis
 }
 
 fn validate_provider_id(field: &'static str, value: &str) -> Result<String, BillingRiskError> {
+    if value.chars().any(char::is_control) {
+        return Err(BillingRiskError::Invalid { field });
+    }
     let value = value.trim();
     if value.is_empty() {
         return Err(BillingRiskError::Empty { field });
@@ -285,9 +291,18 @@ mod tests {
             WebhookIngestDisposition::Retry
         );
         assert_eq!(
+            classify_webhook_persistence(false, true, true),
+            WebhookIngestDisposition::AckApplied
+        );
+        assert_eq!(
             classify_webhook_persistence(true, false, false),
             WebhookIngestDisposition::AckDuplicate
         );
+        #[allow(deprecated)]
+        {
+            assert!(WebhookIngestDisposition::Ack.should_ack_provider());
+            assert!(WebhookIngestDisposition::Ignore.should_ack_provider());
+        }
         assert!(WebhookIngestDisposition::AckIgnored.should_ack_provider());
         assert!(!WebhookIngestDisposition::AckIgnored.should_retry_provider());
         assert!(WebhookIngestDisposition::Retry.should_retry_provider());
@@ -303,5 +318,72 @@ mod tests {
         let redacted = redact_json_snapshot(&value, DEFAULT_SENSITIVE_KEYS);
         assert_eq!(redacted["data"]["client_secret"], "[redacted]");
         assert_eq!(redacted["data"]["nested"][0]["token"], "[redacted]");
+    }
+
+    #[test]
+    fn provider_ids_policy_versions_and_support_refs_validate_boundaries() {
+        let id = ProviderObjectId::new(" stripe:customer ", " cus_123 ").unwrap();
+        assert_eq!(id.kind(), "stripe:customer");
+        assert_eq!(id.id(), "cus_123");
+        assert_eq!(
+            ProviderObjectId::new("", "cus_123"),
+            Err(BillingRiskError::Empty { field: "kind" })
+        );
+        assert_eq!(
+            ProviderObjectId::new("stripe customer", "cus_123"),
+            Err(BillingRiskError::Invalid { field: "kind" })
+        );
+        assert_eq!(
+            ProviderObjectId::new("customer", "bad id"),
+            Err(BillingRiskError::Invalid { field: "id" })
+        );
+        assert_eq!(
+            ProviderObjectId::new("customer", "cus_123\n"),
+            Err(BillingRiskError::Invalid { field: "id" })
+        );
+
+        let terms = PolicyVersion::new("terms:v1.2").unwrap();
+        assert_eq!(terms.as_str(), "terms:v1.2");
+        assert_eq!(
+            PolicyVersion::new("terms v1"),
+            Err(BillingRiskError::Invalid {
+                field: "policy_version"
+            })
+        );
+        assert_eq!(
+            PolicyVersion::new("terms:v1\n"),
+            Err(BillingRiskError::Invalid {
+                field: "policy_version"
+            })
+        );
+
+        let support_ref = SupportMessageRef::new(" msg_123 ").unwrap();
+        assert_eq!(support_ref.as_str(), "msg_123");
+        assert_eq!(
+            SupportMessageRef::new(""),
+            Err(BillingRiskError::Empty {
+                field: "support_message_ref"
+            })
+        );
+    }
+
+    #[test]
+    fn billing_error_display_and_redaction_preserve_safe_values() {
+        assert_eq!(
+            BillingRiskError::Empty { field: "kind" }.to_string(),
+            "kind is empty"
+        );
+        assert_eq!(
+            BillingRiskError::Invalid { field: "id" }.to_string(),
+            "id is invalid"
+        );
+        let value = serde_json::json!({
+            "safe": "visible",
+            "items": ["plain", {"Authorization": "Bearer secret"}]
+        });
+        let redacted = redact_json_snapshot(&value, DEFAULT_SENSITIVE_KEYS);
+        assert_eq!(redacted["safe"], "visible");
+        assert_eq!(redacted["items"][0], "plain");
+        assert_eq!(redacted["items"][1]["Authorization"], "[redacted]");
     }
 }

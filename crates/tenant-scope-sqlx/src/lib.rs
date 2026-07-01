@@ -40,7 +40,11 @@ impl SettingName {
     ///
     /// Returns [`TenantScopeError::InvalidSettingName`] for unsafe names.
     pub fn new(value: impl AsRef<str>) -> Result<Self, TenantScopeError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if value.chars().any(char::is_control) {
+            return Err(TenantScopeError::InvalidSettingName);
+        }
+        let value = value.trim();
         if value.is_empty()
             || value.len() > 128
             || value.starts_with('.')
@@ -383,12 +387,19 @@ mod tests {
     #[test]
     fn rejects_malicious_setting_names() {
         assert!(SettingName::new("app.world_id").is_ok());
+        assert_eq!(
+            SettingName::new(" app.world_id ").unwrap().as_str(),
+            "app.world_id"
+        );
         assert!(SettingName::new("app.world_id_2").is_ok());
         assert!(SettingName::new("App.world_id").is_err());
         assert!(SettingName::new("app.123").is_err());
         assert!(SettingName::new("1.app").is_err());
         assert!(SettingName::new("app.world_id;drop table worlds").is_err());
+        assert!(SettingName::new("app.world_id\n").is_err());
         assert!(SettingName::new(".app").is_err());
+        assert!(SettingName::new("app.").is_err());
+        assert!(SettingName::new("a".repeat(129)).is_err());
     }
 
     #[test]
@@ -416,5 +427,36 @@ mod tests {
         assert_eq!(assignment.value(), "3");
         assert!(ScopeAssignment::from_parts("app.world_id;drop", 7_i64).is_err());
         assert!(ScopeAssignment::from_parts("app.world_id", "bad\0value").is_err());
+    }
+
+    #[test]
+    fn scope_value_variants_and_uuid_serialize_for_set_local() {
+        assert_eq!("value".to_scope_value().unwrap(), "value");
+        assert_eq!("value".to_owned().to_scope_value().unwrap(), "value");
+        assert_eq!(7_u64.to_scope_value().unwrap(), "7");
+
+        #[cfg(feature = "uuid")]
+        {
+            let uuid = uuid::Uuid::nil();
+            assert_eq!(uuid.to_scope_value().unwrap(), uuid.to_string());
+            let assignment = ScopeAssignment::from_parts("app.world_id", uuid).unwrap();
+            assert_eq!(assignment.value(), "00000000-0000-0000-0000-000000000000");
+        }
+    }
+
+    #[test]
+    fn tenant_scope_error_display_is_stable() {
+        assert_eq!(
+            TenantScopeError::InvalidSettingName.to_string(),
+            "setting name is invalid"
+        );
+        assert_eq!(
+            TenantScopeError::InvalidSettingValue.to_string(),
+            "setting value is invalid"
+        );
+        assert_eq!(
+            TenantScopeError::Sql("connection closed".to_owned()).to_string(),
+            "SQL scope helper failed: connection closed"
+        );
     }
 }

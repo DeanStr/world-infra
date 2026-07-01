@@ -143,6 +143,7 @@ mod tests {
     #[test]
     fn report_tracks_operator_results() {
         let mut report = OperatorRunReport::dry_run();
+        assert!(report.dry_run);
         report.record(&OperatorActionResult {
             id: 1,
             action: OperatorAction::RequireManualReconciliation,
@@ -152,5 +153,37 @@ mod tests {
         assert_eq!(report.inspected, 1);
         assert_eq!(report.eligible, 1);
         assert!(report.needs_attention());
+    }
+
+    #[test]
+    fn actions_items_and_apply_reports_expose_attention_semantics() {
+        assert!(OperatorAction::RequireManualReconciliation.requires_manual_reconciliation());
+        assert!(!OperatorAction::Retry.requires_manual_reconciliation());
+        let item = DeadLetterItem {
+            id: "delivery-1",
+            reason: DeadLetterReason::AmbiguousAfterSideEffect,
+            attempts: 3,
+            detail: Some("provider accepted before timeout".to_owned()),
+        };
+        assert!(item.needs_attention());
+
+        let mut report = OperatorRunReport::apply();
+        assert!(!report.dry_run);
+        report.record(&OperatorActionResult {
+            id: "delivery-1",
+            action: OperatorAction::Retry,
+            changed: true,
+            warning: None,
+        });
+        report.record(&OperatorActionResult {
+            id: "delivery-2",
+            action: OperatorAction::Noop,
+            changed: false,
+            warning: None,
+        });
+        assert_eq!(report.inspected, 2);
+        assert_eq!(report.eligible, 1);
+        assert_eq!(report.changed, 1);
+        assert!(!report.needs_attention());
     }
 }

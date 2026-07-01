@@ -47,7 +47,11 @@ impl RequestId {
     /// Returns [`HttpPrimitiveError`] if the value is empty or contains
     /// unsupported characters.
     pub fn new(value: impl AsRef<str>) -> Result<Self, HttpPrimitiveError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if value.chars().any(char::is_control) {
+            return Err(HttpPrimitiveError::InvalidRequestId);
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(HttpPrimitiveError::Empty);
         }
@@ -92,7 +96,8 @@ impl Origin {
         let (scheme, rest) = value
             .split_once("://")
             .ok_or(HttpPrimitiveError::InvalidOrigin)?;
-        if !matches!(scheme, "http" | "https" | "ws" | "wss") {
+        let scheme = scheme.to_ascii_lowercase();
+        if !matches!(scheme.as_str(), "http" | "https" | "ws" | "wss") {
             return Err(HttpPrimitiveError::InvalidOrigin);
         }
         if rest.is_empty() || rest.contains('/') {
@@ -100,7 +105,7 @@ impl Origin {
         }
         let (host, port) = parse_host_port(rest)?;
         Ok(Self {
-            scheme: scheme.to_ascii_lowercase(),
+            scheme,
             host: host.to_ascii_lowercase(),
             port,
         })
@@ -159,6 +164,9 @@ fn parse_host_port(value: &str) -> Result<(String, Option<u16>), HttpPrimitiveEr
 
 fn valid_unbracketed_origin_host(host: &str) -> bool {
     !host.is_empty()
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && !host.contains("..")
         && host
             .chars()
             .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '/' | '?' | '#' | '@' | '[' | ']'))
@@ -591,6 +599,7 @@ mod tests {
     fn request_ids_are_strict() {
         assert_eq!(RequestId::new(" req-1 ").unwrap().as_str(), "req-1");
         assert!(RequestId::new("bad id").is_err());
+        assert!(RequestId::new("req-1\n").is_err());
     }
 
     #[test]
@@ -859,6 +868,14 @@ mod tests {
     }
 
     #[test]
+    fn origin_schemes_are_case_insensitive() {
+        let origin = Origin::parse("HTTPS://Example.COM:443").unwrap();
+        assert_eq!(origin.scheme, "https");
+        assert_eq!(origin.host, "example.com");
+        assert_eq!(origin.port, Some(443));
+    }
+
+    #[test]
     fn rejects_malformed_bracketed_origins() {
         assert!(parse_allowed_origins("https://[2001:db8::1]junk").is_err());
         assert!(parse_allowed_origins("https://[2001:db8::1]:bad").is_err());
@@ -888,6 +905,9 @@ mod tests {
         assert!(parse_allowed_origins("https://user@example.com").is_err());
         assert!(parse_allowed_origins("https://exa mple.com").is_err());
         assert!(parse_allowed_origins("https://exa\tmple.com").is_err());
+        assert!(parse_allowed_origins("https://.example.com").is_err());
+        assert!(parse_allowed_origins("https://example.com.").is_err());
+        assert!(parse_allowed_origins("https://example..com").is_err());
     }
 
     #[test]

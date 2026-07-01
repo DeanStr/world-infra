@@ -437,4 +437,115 @@ mod tests {
         );
         env::remove_var(key);
     }
+
+    #[test]
+    fn required_and_optional_parsers_trim_and_report_errors() {
+        let key = "WORLD_ENV_REQUIRED_TEST";
+        let previous = env::var(key).ok();
+        env::remove_var(key);
+        assert_eq!(
+            required_var(key),
+            Err(EnvError::Missing {
+                name: key.to_owned()
+            })
+        );
+
+        env::set_var(key, " 42 ");
+        assert_eq!(required_var(key).unwrap(), "42");
+        assert_eq!(parse_required::<u32>(key).unwrap(), 42);
+        assert_eq!(parse_optional::<u32>(key).unwrap(), Some(42));
+        assert_eq!(parse_or::<u32>("WORLD_ENV_ABSENT_TEST", 7).unwrap(), 7);
+
+        env::set_var(key, " nope ");
+        assert!(matches!(
+            parse_required::<u32>(key),
+            Err(EnvError::Invalid { name, value, .. }) if name == key && value == "nope"
+        ));
+        restore_env(key, previous);
+    }
+
+    #[test]
+    fn min_policy_clamps_missing_defaults_and_warn_policy_falls_back() {
+        let key = "WORLD_ENV_MIN_POLICY_TEST";
+        let previous = env::var(key).ok();
+        env::remove_var(key);
+        assert_eq!(parse_or_min::<u32>(key, 0, 5).unwrap(), 5);
+        assert_eq!(
+            parse_or_default_with_min_policy::<u32>(key, 0, 5, FallbackPolicy::Strict).unwrap(),
+            5
+        );
+
+        env::set_var(key, "1");
+        assert_eq!(
+            parse_or_default_with_min_policy::<u32>(key, 10, 5, FallbackPolicy::WarnToStderr)
+                .unwrap(),
+            10
+        );
+        assert_eq!(
+            parse_required_min::<u32>(key, &5),
+            Err(EnvError::BelowMinimum {
+                name: key.to_owned(),
+                value: "1".to_owned(),
+                minimum: "5".to_owned(),
+            })
+        );
+        restore_env(key, previous);
+    }
+
+    #[test]
+    fn lenient_bool_env_and_duration_errors_are_precise() {
+        let key = "WORLD_ENV_BOOL_TEST";
+        let previous = env::var(key).ok();
+        env::remove_var(key);
+        assert_eq!(optional_lenient_bool(key).unwrap(), None);
+        env::set_var(key, "on");
+        assert_eq!(optional_lenient_bool(key).unwrap(), Some(true));
+        env::set_var(key, "maybe");
+        assert!(matches!(
+            optional_lenient_bool(key),
+            Err(EnvError::Invalid { name, value, .. }) if name == key && value == "maybe"
+        ));
+        assert!(parse_duration("DURATION", "abc").is_err());
+        assert_eq!(
+            parse_duration("DURATION", "1h").unwrap(),
+            Duration::from_secs(3600)
+        );
+        restore_env(key, previous);
+    }
+
+    #[test]
+    fn display_and_environment_classification_are_stable() {
+        assert_eq!(
+            EnvError::Missing {
+                name: "DATABASE_URL".to_owned()
+            }
+            .to_string(),
+            "DATABASE_URL is required"
+        );
+        assert_eq!(
+            EnvError::Invalid {
+                name: "PORT".to_owned(),
+                value: "abc".to_owned(),
+                message: "invalid digit".to_owned(),
+            }
+            .to_string(),
+            "PORT has invalid value \"abc\": invalid digit"
+        );
+        assert_eq!(classify_environment("local"), EnvironmentKind::Development);
+        assert_eq!(classify_environment("ci"), EnvironmentKind::Test);
+        assert_eq!(
+            classify_environment("pre-production"),
+            EnvironmentKind::Staging
+        );
+        assert_eq!(classify_environment("prod"), EnvironmentKind::Production);
+        assert_eq!(classify_environment("weird"), EnvironmentKind::Unknown);
+    }
+
+    fn restore_env(name: &str, value: Option<String>) {
+        if let Some(value) = value {
+            env::set_var(name, value);
+        } else {
+            env::remove_var(name);
+        }
+    }
 }

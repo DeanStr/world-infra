@@ -288,14 +288,10 @@ fn authority_host(remainder: &str) -> Option<&str> {
         if host.is_empty() || port.strip_prefix(':').is_some_and(|port| port.is_empty()) {
             return None;
         }
-        if host.parse::<IpAddr>().is_err() {
+        if host.parse::<Ipv6Addr>().is_err() {
             return None;
         }
-        return if port.is_empty()
-            || port
-                .strip_prefix(':')
-                .is_some_and(|port| port.chars().all(|ch| ch.is_ascii_digit()))
-        {
+        return if port.is_empty() || port.strip_prefix(':').is_some_and(valid_port) {
             Some(host)
         } else {
             None
@@ -311,11 +307,15 @@ fn authority_host(remainder: &str) -> Option<&str> {
         return None;
     }
     if let Some(port) = port {
-        if port.is_empty() || !port.chars().all(|ch| ch.is_ascii_digit()) {
+        if !valid_port(port) {
             return None;
         }
     }
     Some(host)
+}
+
+fn valid_port(port: &str) -> bool {
+    !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) && port.parse::<u16>().is_ok()
 }
 
 fn validate_host_policy(
@@ -579,8 +579,10 @@ pub fn validate_public_config_safe<'a>(
 
 /// Assert a named header exists and contains every required directive.
 ///
-/// Header name matching is ASCII case-insensitive. Directive checks are simple
-/// substring checks so products can keep their exact CSP/header policy local.
+/// Header name matching is ASCII case-insensitive. Directive checks match
+/// semicolon/comma-separated directive names or exact directive clauses so
+/// products can keep their exact CSP/header policy local without accepting
+/// substring false positives.
 ///
 /// # Errors
 ///
@@ -604,7 +606,7 @@ pub fn assert_header_directives<'a>(
                 directive: (*directive).to_owned(),
             });
         }
-        if !value.contains(directive) {
+        if !header_has_directive(value, directive) {
             return Err(StaticWebError::MissingHeaderDirective {
                 name: name.to_owned(),
                 directive: (*directive).to_owned(),
@@ -612,6 +614,21 @@ pub fn assert_header_directives<'a>(
         }
     }
     Ok(())
+}
+
+fn header_has_directive(value: &str, directive: &str) -> bool {
+    let directive = directive.trim();
+    value.split([';', ',']).any(|part| {
+        let part = part.trim();
+        if part == directive {
+            return true;
+        }
+        let Some(token) = part.split_whitespace().next() else {
+            return false;
+        };
+        let name = token.split_once('=').map_or(token, |(name, _)| name);
+        name.eq_ignore_ascii_case(directive)
+    })
 }
 
 #[cfg(test)]
@@ -650,6 +667,20 @@ mod tests {
         .is_err());
         assert!(validate_public_url(
             "PUBLIC_WEB_BASE",
+            "https://example.com:65536",
+            PublicUrlKind::Http,
+            EnvKind::Production
+        )
+        .is_err());
+        assert!(validate_public_url(
+            "PUBLIC_WEB_BASE",
+            "https://example.com:65535",
+            PublicUrlKind::Http,
+            EnvKind::Production
+        )
+        .is_ok());
+        assert!(validate_public_url(
+            "PUBLIC_WEB_BASE",
             "https://example.com/path with spaces",
             PublicUrlKind::Http,
             EnvKind::Production
@@ -662,18 +693,53 @@ mod tests {
             EnvKind::Production
         )
         .is_err());
+        assert!(validate_public_url(
+            "PUBLIC_WEB_BASE",
+            "https://[8.8.8.8]",
+            PublicUrlKind::Http,
+            EnvKind::Production
+        )
+        .is_err());
+        assert!(validate_public_url(
+            "PUBLIC_WEB_BASE",
+            "https://[2001:db8::1]:65536",
+            PublicUrlKind::Http,
+            EnvKind::Production
+        )
+        .is_err());
+        assert!(validate_public_url(
+            "PUBLIC_WEB_BASE",
+            "https://[2001:db8::1]:65535",
+            PublicUrlKind::Http,
+            EnvKind::Production
+        )
+        .is_ok());
     }
 
     #[test]
     fn public_config_rejects_secret_like_entries() {
         assert!(validate_public_config_safe([("PUBLIC_WEB_BASE", "https://example.com")]).is_ok());
         assert!(validate_public_config_safe([("STRIPE_SECRET_KEY", "sk_live_x")]).is_err());
+        assert_eq!(
+            secret_like_reason("PUBLIC_TOKEN", "abc"),
+            Some("token-like key name")
+        );
+        assert_eq!(
+            secret_like_reason("TURNSTILE_TOKEN", "public-site-key"),
+            None
+        );
+        assert_eq!(
+            secret_like_reason("PUBLIC_KEY", "Bearer abc"),
+            Some("secret-like value prefix")
+        );
     }
 
     #[test]
     fn production_host_policy_rejects_local_and_placeholder_hosts() {
         for value in [
             "https://localhost",
+            "https://localhost.",
+            "https://LOCALHOST",
             "https://127.0.0.1",
             "https://10.0.0.1",
             "https://[::1]",
@@ -686,7 +752,9 @@ mod tests {
             "https://0x7f000001",
             "https://0177.1",
             "https://example.com",
+            "https://Example.COM",
             "https://app.invalid",
+            "https://App.Invalid",
             "https://192.0.2.1",
             "https://198.51.100.1",
             "https://203.0.113.1",
@@ -736,5 +804,145 @@ malformed
         assert_eq!(headers.len(), 2);
         assert_eq!(headers[0].name, "Content-Security-Policy");
         assert_eq!(headers[0].value, "default-src 'self'");
+    }
+
+    #[test]
+    fn development_urls_allow_insecure_schemes_and_websocket_kind() {
+        let url = validate_public_url(
+            "PUBLIC_WEB_BASE",
+            " HTTP://Example.com/path ",
+            PublicUrlKind::Http,
+            EnvKind::Development,
+        )
+        .unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.remainder, "Example.com/path");
+
+        assert!(validate_public_url(
+            "PUBLIC_WS_BASE",
+            "wss://example.com/socket",
+            PublicUrlKind::WebSocket,
+            EnvKind::Production,
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_public_url(
+                "PUBLIC_WS_BASE",
+                "ws://example.com/socket",
+                PublicUrlKind::WebSocket,
+                EnvKind::Staging,
+            ),
+            Err(StaticWebError::InsecureScheme { scheme, .. }) if scheme == "ws"
+        ));
+    }
+
+    #[test]
+    fn host_policy_errors_preserve_rejection_reasons() {
+        let error = validate_public_url_with_host_policy(
+            "PUBLIC_WEB_BASE",
+            "https://app.localhost",
+            PublicUrlKind::Http,
+            EnvKind::Production,
+            HostPolicy::production(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "PUBLIC_WEB_BASE host app.localhost is rejected: localhost host"
+        );
+
+        let error = validate_public_url_with_host_policy(
+            "PUBLIC_WEB_BASE",
+            "https://0x7f000001",
+            PublicUrlKind::Http,
+            EnvKind::Production,
+            HostPolicy::production(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            StaticWebUrlPolicyError::RejectedHost {
+                reason: "non-canonical IPv4 host",
+                ..
+            }
+        ));
+        assert!(validate_public_url_with_host_policy(
+            "PUBLIC_WEB_BASE",
+            "https://0x7f000001",
+            PublicUrlKind::Http,
+            EnvKind::Production,
+            HostPolicy::permissive(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn header_directives_report_missing_header_and_missing_directive() {
+        let headers = [(
+            "content-security-policy",
+            "default-src 'self'; frame-ancestors 'none'",
+        )];
+        assert!(
+            assert_header_directives(headers, "Content-Security-Policy", &["default-src"]).is_ok()
+        );
+        assert!(assert_header_directives(
+            headers,
+            "Content-Security-Policy",
+            &["frame-ancestors 'none'"]
+        )
+        .is_ok());
+        assert_eq!(
+            assert_header_directives(
+                [("Content-Security-Policy", "not-frame-ancestors 'none'")],
+                "Content-Security-Policy",
+                &["frame-ancestors"]
+            )
+            .unwrap_err(),
+            StaticWebError::MissingHeaderDirective {
+                name: "Content-Security-Policy".to_owned(),
+                directive: "frame-ancestors".to_owned()
+            }
+        );
+        assert_eq!(
+            assert_header_directives(headers, "X-Frame-Options", &["DENY"]).unwrap_err(),
+            StaticWebError::MissingHeader {
+                name: "X-Frame-Options".to_owned()
+            }
+        );
+        assert_eq!(
+            assert_header_directives(headers, "Content-Security-Policy", &["script-src"])
+                .unwrap_err(),
+            StaticWebError::MissingHeaderDirective {
+                name: "Content-Security-Policy".to_owned(),
+                directive: "script-src".to_owned()
+            }
+        );
+        assert!(assert_header_directives(headers, "Content-Security-Policy", &[""]).is_err());
+    }
+
+    #[test]
+    fn static_web_error_display_is_stable() {
+        assert_eq!(
+            StaticWebError::Empty {
+                name: "PUBLIC_WEB_BASE".to_owned()
+            }
+            .to_string(),
+            "PUBLIC_WEB_BASE is empty"
+        );
+        assert_eq!(
+            StaticWebError::InvalidUrl {
+                name: "PUBLIC_WEB_BASE".to_owned()
+            }
+            .to_string(),
+            "PUBLIC_WEB_BASE is not a valid public URL"
+        );
+        assert_eq!(
+            StaticWebError::SecretLikeValue {
+                key: "SECRET".to_owned(),
+                reason: "secret-like key name",
+            }
+            .to_string(),
+            "public config key SECRET looks secret-like: secret-like key name"
+        );
     }
 }

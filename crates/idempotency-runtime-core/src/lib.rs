@@ -129,6 +129,9 @@ impl fmt::Display for IdempotencyRuntimeError {
 impl Error for IdempotencyRuntimeError {}
 
 fn validate_part(value: &str) -> Result<&str, IdempotencyRuntimeError> {
+    if value.chars().any(char::is_control) {
+        return Err(IdempotencyRuntimeError::InvalidKey);
+    }
     let value = value.trim();
     if value.is_empty()
         || value.len() > 512
@@ -741,6 +744,21 @@ mod tests {
     fn rejects_unsafe_namespaces_and_keys() {
         assert!(IdempotencyNamespace::new("airline").is_ok());
         assert!(IdempotencyNamespace::new("bad namespace").is_err());
+        assert_eq!(
+            IdempotencyNamespace::new(" airline ").unwrap().as_str(),
+            "airline"
+        );
+        assert!(IdempotencyNamespace::new("").is_err());
+        assert!(IdempotencyNamespace::new("bad\nnamespace").is_err());
+        assert!(IdempotencyNamespace::new("airline\n").is_err());
+        assert_eq!(
+            namespaced_key(None, " bad key ", IdempotencyKeyFormat::LengthPrefixed),
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
+        assert_eq!(
+            namespaced_key(None, "key\n", IdempotencyKeyFormat::LengthPrefixed),
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
     }
 
     #[test]
@@ -770,6 +788,10 @@ mod tests {
             .unwrap(),
             namespaced_key(None, "a:key", IdempotencyKeyFormat::LengthPrefixed).unwrap()
         );
+        assert_eq!(
+            namespaced_key(None, "key", IdempotencyKeyFormat::LengthPrefixed).unwrap(),
+            "idem:0::3:key"
+        );
     }
 
     #[test]
@@ -787,6 +809,97 @@ mod tests {
         assert_eq!(
             namespaced_key(None, "evt:1", IdempotencyKeyFormat::NamespacePrefix).unwrap(),
             "evt:1"
+        );
+    }
+
+    #[test]
+    fn error_messages_are_stable_for_product_logs() {
+        assert_eq!(
+            IdempotencyRuntimeError::InvalidNamespace.to_string(),
+            "idempotency namespace is invalid"
+        );
+        assert_eq!(
+            IdempotencyRuntimeError::InvalidKey.to_string(),
+            "idempotency key is invalid"
+        );
+        assert_eq!(
+            IdempotencyRuntimeError::Timeout.to_string(),
+            "idempotency backend timed out"
+        );
+        assert_eq!(
+            IdempotencyRuntimeError::UnsupportedMarker.to_string(),
+            "idempotency key has unsupported marker value"
+        );
+        assert_eq!(
+            IdempotencyRuntimeError::Backend("redis down".to_owned()).to_string(),
+            "idempotency backend failed: redis down"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_accessors_formats_and_invalid_keys_are_enforced() {
+        let namespace = IdempotencyNamespace::new("app").unwrap();
+        let store = InMemoryIdempotencyStore::with_namespace(namespace.clone())
+            .with_key_format(IdempotencyKeyFormat::NamespacePrefix);
+        assert_eq!(store.namespace(), Some(&namespace));
+        assert_eq!(store.key_format(), IdempotencyKeyFormat::NamespacePrefix);
+
+        assert_eq!(
+            store.set_once("bad key", Duration::from_secs(1)).await,
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
+        assert_eq!(
+            store
+                .claim_pending("bad\tkey", Duration::from_secs(1))
+                .await,
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
+        assert_eq!(
+            store.mark_completed("", Duration::from_secs(1)).await,
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
+        assert_eq!(
+            store.delete("bad\nkey").await,
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
+        assert_eq!(
+            store.exists("bad key").await,
+            Err(IdempotencyRuntimeError::InvalidKey)
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_zero_ttl_is_clamped_to_a_short_positive_ttl() {
+        let store = InMemoryIdempotencyStore::new();
+        assert!(store.set_once("zero", Duration::ZERO).await.unwrap());
+        assert!(store.exists("zero").await.unwrap());
+        let mut expired = false;
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(5));
+            if !store.exists("zero").await.unwrap() {
+                expired = true;
+                break;
+            }
+        }
+        assert!(expired);
+    }
+
+    #[cfg(feature = "redis")]
+    #[test]
+    fn redis_store_accessors_debug_and_invalid_keys_do_not_connect() {
+        let client = redis::Client::open("redis://127.0.0.1:1").unwrap();
+        let namespace = IdempotencyNamespace::new("app").unwrap();
+        let store = RedisIdempotencyStore::new(client, Duration::ZERO)
+            .with_namespace(namespace)
+            .with_key_format(IdempotencyKeyFormat::NamespacePrefix);
+
+        assert_eq!(store.command_timeout(), Duration::from_millis(1));
+        let debug = format!("{store:?}");
+        assert!(debug.contains("RedisIdempotencyStore"));
+        assert!(debug.contains("NamespacePrefix"));
+        assert_eq!(
+            store.redis_key("bad key"),
+            Err(IdempotencyRuntimeError::InvalidKey)
         );
     }
 

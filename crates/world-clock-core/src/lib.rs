@@ -166,11 +166,35 @@ mod tests {
     fn cadence_calculates_due_time() {
         let cadence = Cadence::new(Duration::from_secs(60)).unwrap();
         let last = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        assert_eq!(cadence.duration(), Duration::from_secs(60));
         assert_eq!(
             cadence.next_due_after(last),
             SystemTime::UNIX_EPOCH + Duration::from_secs(160)
         );
+        assert!(!cadence.is_due(last, SystemTime::UNIX_EPOCH + Duration::from_secs(159)));
         assert!(cadence.is_due(last, SystemTime::UNIX_EPOCH + Duration::from_secs(160)));
+    }
+
+    #[test]
+    fn cycle_numbers_days_and_clock_errors_are_stable() {
+        assert_eq!(CycleNumber::new(7).get(), 7);
+        assert_eq!(CycleNumber::new(7).next().get(), 8);
+        assert_eq!(CycleNumber::new(u64::MAX).next().get(), u64::MAX);
+        assert_eq!(CycleNumber::new(7).to_string(), "7");
+        assert_eq!(WorldDay::new(42).get(), 42);
+        assert_eq!(WorldDay::new(42).to_string(), "42");
+        assert_eq!(Cadence::new(Duration::ZERO), Err(ClockError::ZeroCadence));
+        assert_eq!(
+            ClockError::ZeroCadence.to_string(),
+            "cadence duration must be non-zero"
+        );
+        assert_eq!(
+            cutoff_before(
+                SystemTime::UNIX_EPOCH + Duration::from_secs(5),
+                Duration::from_secs(4)
+            ),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1)
+        );
     }
 
     #[test]

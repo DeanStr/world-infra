@@ -64,7 +64,11 @@ impl KeySegment {
     /// Returns [`KeyError`] if the segment is empty, too long, or contains
     /// unsupported characters.
     pub fn new(value: impl AsRef<str>) -> Result<Self, KeyError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+            return Err(KeyError::InvalidCharacter { ch });
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(KeyError::EmptySegment);
         }
@@ -212,6 +216,10 @@ mod tests {
         assert_eq!(
             KeySegment::new("bad/value"),
             Err(KeyError::InvalidCharacter { ch: '/' })
+        );
+        assert_eq!(
+            KeySegment::new("alert\n"),
+            Err(KeyError::InvalidCharacter { ch: '\n' })
         );
     }
 

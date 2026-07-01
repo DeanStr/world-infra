@@ -67,7 +67,11 @@ fn validated_metadata(
     max: usize,
     allow_colon: bool,
 ) -> Result<String, EventMetadataError> {
-    let value = value.as_ref().trim();
+    let value = value.as_ref();
+    if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+        return Err(EventMetadataError::InvalidCharacter { field, ch });
+    }
+    let value = value.trim();
     if value.is_empty() {
         return Err(EventMetadataError::Empty { field });
     }
@@ -288,6 +292,14 @@ mod tests {
             "world.cycle_completed"
         );
         assert_eq!(
+            "source.service".parse::<EventSource>().unwrap().as_str(),
+            "source.service"
+        );
+        assert_eq!(
+            CorrelationId::new("request:123").unwrap().to_string(),
+            "request:123"
+        );
+        assert_eq!(
             EventId::new("cycle-completed:1:instance-1:2")
                 .unwrap()
                 .as_str(),
@@ -308,8 +320,30 @@ mod tests {
             })
         );
         assert_eq!(
+            EventType::new("world.cycle_completed\n"),
+            Err(EventMetadataError::InvalidCharacter {
+                field: "event_type",
+                ch: '\n'
+            })
+        );
+        assert_eq!(
             SchemaVersion::new(0),
             Err(EventMetadataError::ZeroSchemaVersion)
+        );
+        assert_eq!(SchemaVersion::new(2).unwrap().get(), 2);
+        assert_eq!(SchemaVersion::new(2).unwrap().to_string(), "2");
+        assert_eq!(
+            EventMetadataError::TooLong {
+                field: "event_type",
+                len: 129,
+                max: 128,
+            }
+            .to_string(),
+            "event_type length 129 exceeds 128"
+        );
+        assert_eq!(
+            EventMetadataError::ZeroSchemaVersion.to_string(),
+            "schema version must be greater than zero"
         );
     }
 
@@ -333,6 +367,11 @@ mod tests {
         };
 
         let envelope = EventEnvelope::from_parts(metadata, "payload-owned-by-product");
+        assert_eq!(
+            envelope.metadata().event_type.as_str(),
+            "world.cycle_completed"
+        );
+        assert_eq!(envelope.payload(), &"payload-owned-by-product");
         assert_eq!(
             envelope.metadata.world.no_incarnation_label(),
             "world:chairman-world"
@@ -360,9 +399,11 @@ mod tests {
         };
 
         let envelope = EventEnvelope::from_parts(metadata, ());
+        let (metadata, payload) = envelope.into_parts();
         assert_eq!(
-            envelope.metadata.world.incarnation_label(),
+            metadata.world.incarnation_label(),
             "world:1:incarnation:instance-1"
         );
+        assert_eq!(payload, ());
     }
 }

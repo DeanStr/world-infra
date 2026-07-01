@@ -61,7 +61,11 @@ fn validated_key_part(
     value: impl AsRef<str>,
     max: usize,
 ) -> Result<String, FanoutMetadataError> {
-    let value = value.as_ref().trim();
+    let value = value.as_ref();
+    if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+        return Err(FanoutMetadataError::InvalidCharacter { field, ch });
+    }
+    let value = value.trim();
     if value.is_empty() {
         return Err(FanoutMetadataError::Empty { field });
     }
@@ -376,9 +380,27 @@ mod tests {
                 ch: ' '
             }
         ));
+        assert!(matches!(
+            FanoutTopic::new("prod:world/2.cycles\n").unwrap_err(),
+            FanoutMetadataError::InvalidCharacter {
+                field: "topic",
+                ch: '\n'
+            }
+        ));
         assert_eq!(
             FanoutTopic::new("prod:world/2.cycles").unwrap().as_str(),
             "prod:world/2.cycles"
+        );
+        assert_eq!(FanoutTopic::new("topic").unwrap().to_string(), "topic");
+        assert_eq!(FanoutNodeId::new(" node-1 ").unwrap().as_str(), "node-1");
+        assert_eq!(FanoutStableId::new("event:1").unwrap().as_str(), "event:1");
+        assert_eq!(
+            FanoutMetadataError::InvalidCharacter {
+                field: "topic",
+                ch: ' ',
+            }
+            .to_string(),
+            "topic contains invalid character ' '"
         );
     }
 
@@ -390,6 +412,16 @@ mod tests {
         let failure = FanoutFailure::ambiguous_after_attempt("redis publish timeout");
         assert_eq!(failure.kind(), FanoutFailureKind::AmbiguousAfterAttempt);
         assert!(failure.requires_boundary_ambiguity());
+        assert_eq!(
+            failure.to_string(),
+            "event fanout may have reached the backend before failing: redis publish timeout"
+        );
+        let clear = FanoutFailure::clear("not connected");
+        assert_eq!(clear.kind(), FanoutFailureKind::ClearFailure);
+        assert_eq!(
+            clear.to_string(),
+            "event fanout failed before delivery was acknowledged: not connected"
+        );
     }
 
     #[test]
@@ -408,6 +440,10 @@ mod tests {
             local_broadcast_outcome(Err(())),
             PublishOutcome::NoSubscribers
         );
+        assert!(PublishOutcome::published().is_published());
+        assert!(PublishOutcome::published_to(1).is_published());
+        assert!(PublishOutcome::published_to(0).is_no_subscribers());
+        assert!(PublishOutcome::ambiguous_after_attempt("timeout").requires_boundary_ambiguity());
     }
 
     #[test]
@@ -458,5 +494,14 @@ mod tests {
             Some("cycle-completed:1:42")
         );
         assert!(envelope.source().is_replay());
+        assert!(!FanoutSource::Local.is_replay());
+        assert!(!FanoutSource::SelfOriginated {
+            node_id: FanoutNodeId::new("node-a").unwrap(),
+        }
+        .is_replay());
+        assert!(!FanoutSource::Remote {
+            node_id: FanoutNodeId::new("node-b").unwrap(),
+        }
+        .is_replay());
     }
 }

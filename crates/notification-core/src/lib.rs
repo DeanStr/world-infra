@@ -191,7 +191,14 @@ impl NotificationTarget {
     /// contains control characters. Channel-specific validation remains product
     /// and provider policy.
     pub fn new(value: impl AsRef<str>) -> Result<Self, NotificationError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+            return Err(NotificationError::InvalidCharacter {
+                field: "target",
+                ch,
+            });
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(NotificationError::Empty { field: "target" });
         }
@@ -200,12 +207,6 @@ impl NotificationTarget {
                 field: "target",
                 len: value.len(),
                 max: MAX_TARGET_LEN,
-            });
-        }
-        if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
-            return Err(NotificationError::InvalidCharacter {
-                field: "target",
-                ch,
             });
         }
         Ok(Self(value.to_owned()))
@@ -450,7 +451,14 @@ impl ProviderFailureCode {
     /// Returns [`NotificationError`] if the code is blank, too long, or
     /// contains unsupported characters.
     pub fn new(value: impl AsRef<str>) -> Result<Self, NotificationError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+            return Err(NotificationError::InvalidCharacter {
+                field: "provider_failure_code",
+                ch,
+            });
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(NotificationError::Empty {
                 field: "provider_failure_code",
@@ -721,6 +729,13 @@ mod tests {
         assert_eq!("smtp".parse(), Ok(NotificationChannel::Email));
         assert_eq!("web-push".parse(), Ok(NotificationChannel::BrowserPush));
         assert_eq!(NotificationChannel::Fcm.as_str(), "fcm");
+        assert_eq!("APNS".parse(), Ok(NotificationChannel::Apns));
+        assert_eq!("webhook".parse(), Ok(NotificationChannel::Webhook));
+        assert_eq!(NotificationChannel::Email.to_string(), "email");
+        assert_eq!(
+            "sms".parse::<NotificationChannel>(),
+            Err(NotificationError::UnknownChannel("sms".to_owned()))
+        );
     }
 
     #[test]
@@ -776,6 +791,16 @@ mod tests {
 
     #[test]
     fn builds_delivery_context_from_raw_fields() {
+        let direct = NotificationDeliveryContext::from_raw_fields(9_i64, "smtp", 3, 2).unwrap();
+        assert_eq!(direct.delivery_id, 9);
+        assert_eq!(direct.delivery_version.get(), 3);
+        assert_eq!(direct.attempt.get(), 2);
+
+        let signed =
+            NotificationDeliveryContext::from_raw_i32_fields(10_i64, "webhook", 4, 3).unwrap();
+        assert_eq!(signed.channel, NotificationChannel::Webhook);
+        assert_eq!(signed.attempt.as_u32(), 3);
+
         let context =
             NotificationDeliveryContext::from_completed_count_fields(7_i64, "email", 2, 4).unwrap();
         assert_eq!(context.delivery_id, 7);
@@ -791,10 +816,15 @@ mod tests {
             NotificationDeliveryContext::from_completed_count_i32_fields(7_i64, "email", 2, -1)
                 .is_err()
         );
+        assert!(NotificationDeliveryContext::from_raw_i32_fields(7_i64, "email", 2, 0).is_err());
     }
 
     #[test]
     fn maps_provider_outcomes_to_delivery_outcomes() {
+        assert_eq!(
+            NotificationProviderOutcome::accepted().as_delivery_outcome(),
+            DeliveryAttemptOutcome::Delivered
+        );
         let outcome = NotificationProviderOutcome::retryable_after(Duration::from_secs(30));
         assert_eq!(
             outcome.as_delivery_outcome(),
@@ -803,9 +833,24 @@ mod tests {
             }
         );
         assert_eq!(
+            NotificationProviderOutcome::retryable(None).as_delivery_outcome(),
+            DeliveryAttemptOutcome::RetryableFailure { retry_after: None }
+        );
+        assert_eq!(
+            NotificationProviderOutcome::retryable_without_hint().as_delivery_outcome(),
+            DeliveryAttemptOutcome::RetryableFailure { retry_after: None }
+        );
+        assert_eq!(
+            NotificationProviderOutcome::permanent_failure().as_delivery_outcome(),
+            DeliveryAttemptOutcome::PermanentFailure
+        );
+        assert_eq!(
             NotificationProviderOutcome::ambiguous_after_side_effect().as_delivery_outcome(),
             DeliveryAttemptOutcome::AmbiguousAfterSideEffect
         );
+        assert!(NotificationProviderOutcome::permanent_failure().is_permanent_failure());
+        assert!(NotificationProviderOutcome::ambiguous_after_side_effect()
+            .is_ambiguous_after_side_effect());
     }
 
     #[test]
@@ -820,6 +865,23 @@ mod tests {
             NotificationProviderOutcome::retryable_after(Duration::from_secs(45))
         );
         assert!(failure.as_provider_outcome().is_retryable_failure());
+        assert_eq!(failure.retry_after(), Some(Duration::from_secs(45)));
+        assert_eq!(
+            NotificationProviderOutcome::from_provider_failure(&failure),
+            NotificationProviderOutcome::retryable_after(Duration::from_secs(45))
+        );
+        assert_eq!(
+            NotificationProviderOutcome::from(ProviderFailure::permanent()),
+            NotificationProviderOutcome::PermanentFailure
+        );
+        assert_eq!(
+            ProviderFailure::ambiguous_after_side_effect().as_provider_outcome(),
+            NotificationProviderOutcome::AmbiguousAfterSideEffect
+        );
+        assert_eq!(
+            ProviderFailure::retryable().as_provider_outcome(),
+            NotificationProviderOutcome::RetryableFailure { retry_after: None }
+        );
     }
 
     #[test]
@@ -849,6 +911,10 @@ mod tests {
             ProviderFailureCode::new("HTTP_503"),
             Err(NotificationError::InvalidCharacter { ch: 'H', .. })
         ));
+        assert!(matches!(
+            ProviderFailureCode::new("http_503\n"),
+            Err(NotificationError::InvalidCharacter { ch: '\n', .. })
+        ));
     }
 
     #[test]
@@ -859,9 +925,64 @@ mod tests {
                 .as_str(),
             "user@example.test"
         );
+        assert_eq!(
+            " user@example.test "
+                .parse::<NotificationTarget>()
+                .unwrap()
+                .to_string(),
+            "user@example.test"
+        );
+        assert_eq!(
+            NotificationTarget::new(" "),
+            Err(NotificationError::Empty { field: "target" })
+        );
+        assert!(matches!(
+            NotificationTarget::new("x".repeat(1025)),
+            Err(NotificationError::TooLong {
+                field: "target",
+                len: 1025,
+                max: 1024
+            })
+        ));
         assert!(matches!(
             NotificationTarget::new("bad\nvalue"),
             Err(NotificationError::InvalidCharacter { .. })
         ));
+        assert!(matches!(
+            NotificationTarget::new("user@example.test\n"),
+            Err(NotificationError::InvalidCharacter {
+                field: "target",
+                ch: '\n'
+            })
+        ));
+    }
+
+    #[test]
+    fn notification_error_display_strings_are_actionable() {
+        assert_eq!(
+            NotificationError::Empty { field: "target" }.to_string(),
+            "target is empty"
+        );
+        assert_eq!(
+            NotificationError::TooLong {
+                field: "target",
+                len: 1025,
+                max: 1024,
+            }
+            .to_string(),
+            "target length 1025 exceeds 1024"
+        );
+        assert_eq!(
+            NotificationError::InvalidCharacter {
+                field: "target",
+                ch: '\n',
+            }
+            .to_string(),
+            "target contains invalid character '\\n'"
+        );
+        assert_eq!(
+            NotificationError::InvalidAttempt.to_string(),
+            "delivery attempt must be positive"
+        );
     }
 }

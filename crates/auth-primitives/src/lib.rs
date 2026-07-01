@@ -120,7 +120,11 @@ impl Audience {
     ///
     /// Returns [`AuthPrimitiveError`] for blank or unsafe labels.
     pub fn new(value: impl AsRef<str>) -> Result<Self, AuthPrimitiveError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if value.chars().any(char::is_control) {
+            return Err(AuthPrimitiveError::Invalid { field: "audience" });
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(AuthPrimitiveError::Empty { field: "audience" });
         }
@@ -213,5 +217,77 @@ mod tests {
     fn redaction_keeps_only_short_prefix() {
         assert_eq!(redact_secret("abcdef123456"), "abcd...[redacted]");
         assert_eq!(redact_secret("short"), "[redacted]");
+    }
+
+    #[test]
+    fn token_types_parse_display_and_reject_unknown_values() {
+        assert_eq!(" ACCESS ".parse::<TokenType>(), Ok(TokenType::Access));
+        assert_eq!("refresh".parse::<TokenType>(), Ok(TokenType::Refresh));
+        assert_eq!(
+            "impersonation".parse::<TokenType>(),
+            Ok(TokenType::Impersonation)
+        );
+        assert_eq!("exchange".parse::<TokenType>(), Ok(TokenType::Exchange));
+        assert_eq!(TokenType::Refresh.to_string(), "refresh");
+        assert_eq!(
+            "magic".parse::<TokenType>(),
+            Err(AuthPrimitiveError::UnknownTokenType("magic".to_owned()))
+        );
+    }
+
+    #[test]
+    fn audience_and_session_version_validate_edges() {
+        let audience = Audience::new(" chairman-api:v1 ").unwrap();
+        assert_eq!(audience.as_str(), "chairman-api:v1");
+        assert_eq!(
+            Audience::new(" "),
+            Err(AuthPrimitiveError::Empty { field: "audience" })
+        );
+        assert_eq!(
+            Audience::new("bad audience"),
+            Err(AuthPrimitiveError::Invalid { field: "audience" })
+        );
+        assert_eq!(
+            Audience::new("chairman-api\n"),
+            Err(AuthPrimitiveError::Invalid { field: "audience" })
+        );
+        assert_eq!(
+            Audience::new("a".repeat(129)),
+            Err(AuthPrimitiveError::Invalid { field: "audience" })
+        );
+        assert_eq!(SessionVersion::new(7).unwrap().get(), 7);
+        assert_eq!(
+            SessionVersion::new(0),
+            Err(AuthPrimitiveError::InvalidSessionVersion)
+        );
+    }
+
+    #[test]
+    fn auth_error_display_and_origin_matching_are_stable() {
+        assert_eq!(
+            AuthPrimitiveError::Empty { field: "audience" }.to_string(),
+            "audience is empty"
+        );
+        assert_eq!(
+            AuthPrimitiveError::Invalid { field: "audience" }.to_string(),
+            "audience is invalid"
+        );
+        assert_eq!(
+            AuthPrimitiveError::InvalidSessionVersion.to_string(),
+            "session version must be positive"
+        );
+        assert_eq!(
+            AuthPrimitiveError::UnknownTokenType("magic".to_owned()).to_string(),
+            "unknown token type magic"
+        );
+        assert!(origin_allowed(
+            " https://app.example ",
+            &["https://api.example", " https://app.example "]
+        ));
+        assert!(!origin_allowed("", &["https://app.example"]));
+        assert!(!origin_allowed(
+            "https://evil.example",
+            &["https://app.example"]
+        ));
     }
 }

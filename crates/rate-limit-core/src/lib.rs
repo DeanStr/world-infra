@@ -434,6 +434,9 @@ fn limit_spec_from_json_value(
 }
 
 fn validate_key_part(value: &str) -> Result<&str, RateLimitError> {
+    if value.chars().any(char::is_control) {
+        return Err(RateLimitError::InvalidKey);
+    }
     let value = value.trim();
     if value.is_empty()
         || value.len() > 256
@@ -835,11 +838,42 @@ mod tests {
             .unwrap();
         assert!(decision.allowed);
         assert_eq!(decision.remaining, u32::MAX);
+        assert_eq!(decision.retry_after, None);
+        assert_eq!(decision.health, RateLimitHealth::Healthy);
+    }
+
+    #[test]
+    fn decision_failure_policy_and_backend_error_display_are_stable() {
+        assert_eq!(
+            RateLimitDecision::from_failure(FailurePolicy::FailOpen),
+            RateLimitDecision {
+                allowed: true,
+                remaining: 0,
+                retry_after: None,
+                health: RateLimitHealth::Unavailable,
+            }
+        );
+        assert!(!RateLimitDecision::from_failure(FailurePolicy::FailClosed).allowed);
+        assert_eq!(
+            RateLimitError::InvalidKey.to_string(),
+            "rate-limit key is invalid"
+        );
+        assert_eq!(
+            RateLimitError::ZeroWindow.to_string(),
+            "rate-limit window must be non-zero"
+        );
+        assert_eq!(
+            RateLimitError::Backend("redis".to_owned()).to_string(),
+            "rate-limit backend failed: redis"
+        );
+        let _ = RateLimitHealth::Degraded;
     }
 
     #[test]
     fn parses_limit_specs() {
         assert_eq!("unlimited".parse::<LimitSpec>(), Ok(LimitSpec::Unlimited));
+        assert_eq!(parse_limit_spec("off"), Ok(LimitSpec::Unlimited));
+        assert!(parse_limit_spec("none").unwrap().is_unlimited());
         assert_eq!(
             "10/min".parse::<LimitSpec>(),
             Ok(LimitSpec::Fixed {
@@ -879,6 +913,15 @@ mod tests {
         assert!(parse_limit_spec_strict("10/60s").is_ok());
         assert!(parse_limit_spec("0/min").is_err());
         assert!(LimitSpec::fixed(5, Duration::ZERO).is_err());
+        assert_eq!(LimitParseError::Empty.to_string(), "limit spec is empty");
+        assert_eq!(
+            LimitParseError::InvalidCount.to_string(),
+            "limit count is invalid"
+        );
+        assert_eq!(
+            LimitParseError::InvalidWindow.to_string(),
+            "limit window is invalid"
+        );
     }
 
     #[test]
@@ -909,6 +952,29 @@ mod tests {
         assert!(catalog.iter().any(|(label, _)| label == "search"));
         assert!(!catalog.iter().any(|(label, _)| label == " search "));
         assert!(LimitCatalog::from_pairs([("bad label", LimitSpec::Unlimited)]).is_err());
+
+        let replaced = catalog.insert("search", LimitSpec::Unlimited).unwrap();
+        assert_eq!(
+            replaced,
+            Some(LimitSpec::fixed(30, Duration::from_secs(60)).unwrap())
+        );
+        let other = LimitCatalog::from_pairs([("admin", LimitSpec::Unlimited)]).unwrap();
+        catalog.merge(other);
+        assert_eq!(catalog.len(), 3);
+        assert!(!catalog.is_empty());
+        assert!(catalog.get("admin").unwrap().is_unlimited());
+        assert_eq!(
+            LimitCatalogError::InvalidJson("expected object".to_owned()).to_string(),
+            "limit catalog JSON is invalid: expected object"
+        );
+        assert_eq!(
+            LimitCatalogError::InvalidLabel("bad label".to_owned()).to_string(),
+            "limit label is invalid: bad label"
+        );
+        assert_eq!(
+            LimitCatalogError::InvalidSpec("api".to_owned()).to_string(),
+            "limit spec is invalid for label api"
+        );
     }
 
     #[test]
@@ -980,6 +1046,35 @@ mod tests {
         let second = backend.check(&ns, &key, limit, UNIX_EPOCH).unwrap();
         assert!(!second.allowed);
         assert_eq!(second.retry_after, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn in_process_backend_tracks_active_buckets_and_rejects_zero_window() {
+        let backend = InProcessFixedWindow::new();
+        let ns = Namespace::new("app").unwrap();
+        let key = RateLimitKey::new("anonymous").unwrap();
+        assert_eq!(backend.active_bucket_count().unwrap(), 0);
+        assert_eq!(
+            backend.check(
+                &ns,
+                &key,
+                LimitSpec::Fixed {
+                    count: NonZeroU32::new(1).unwrap(),
+                    window: Duration::ZERO,
+                },
+                UNIX_EPOCH,
+            ),
+            Err(RateLimitError::ZeroWindow)
+        );
+        backend
+            .check(
+                &ns,
+                &key,
+                LimitSpec::fixed(1, Duration::from_secs(1)).unwrap(),
+                UNIX_EPOCH,
+            )
+            .unwrap();
+        assert_eq!(backend.active_bucket_count().unwrap(), 1);
     }
 
     #[test]
@@ -1097,5 +1192,7 @@ mod tests {
     fn namespace_rejects_unsafe_values() {
         assert!(Namespace::new("ok.namespace").is_ok());
         assert!(Namespace::new("bad namespace").is_err());
+        assert!(Namespace::new("api\n").is_err());
+        assert!(RateLimitKey::new("user\n").is_err());
     }
 }

@@ -247,4 +247,59 @@ mod tests {
         assert_object_keys_allowed(&value, "", &["messageType", "world"]).unwrap();
         assert!(assert_object_keys_allowed(&value, "", &["messageType"]).is_err());
     }
+
+    #[test]
+    fn json_contract_mismatches_and_parse_errors_are_descriptive() {
+        assert!(matches!(
+            parse_json("{bad"),
+            Err(ContractTestError::Json(_))
+        ));
+        let expected = parse_json(r#"{"a":1}"#).unwrap();
+        let actual = parse_json(r#"{"a":2}"#).unwrap();
+        let error = assert_json_contract(&expected, &actual).unwrap_err();
+        assert_eq!(
+            error,
+            ContractTestError::JsonMismatch {
+                expected: r#"{"a":1}"#.to_owned(),
+                actual: r#"{"a":2}"#.to_owned(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            r#"canonical JSON mismatch; expected {"a":1}, got {"a":2}"#
+        );
+    }
+
+    #[test]
+    fn path_helpers_cover_absent_non_object_and_mutation_cases() {
+        let value = parse_json(r#"{"messageType":"cycleCompleted","world":{"id":1}}"#).unwrap();
+        assert_eq!(get_path(&value, ""), Some(&value));
+        assert_eq!(
+            assert_required_path(&value, "world.instanceId"),
+            Err(ContractTestError::MissingPath {
+                path: "world.instanceId".to_owned()
+            })
+        );
+        assert_eq!(
+            assert_absent_path(&value, "world.id"),
+            Err(ContractTestError::UnexpectedPath {
+                path: "world.id".to_owned()
+            })
+        );
+        assert_eq!(
+            assert_object_keys_allowed(&value, "messageType", &[]),
+            Err(ContractTestError::ExpectedObject {
+                path: "messageType".to_owned()
+            })
+        );
+        assert_eq!(assert_object_keys_allowed(&value, "world", &["id"]), Ok(()));
+        assert_eq!(
+            without_top_level_field(&value, "messageType")["messageType"],
+            Value::Null
+        );
+        assert_eq!(
+            with_unknown_top_level_field(&value, "extra")["extra"],
+            Value::String("unexpected".to_owned())
+        );
+    }
 }

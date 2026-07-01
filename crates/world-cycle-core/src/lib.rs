@@ -73,7 +73,14 @@ impl WorkerId {
     /// Returns [`WorldCycleError`] when the id is empty, too long, or contains
     /// unsupported characters.
     pub fn new(value: impl AsRef<str>) -> Result<Self, WorldCycleError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+            return Err(WorldCycleError::InvalidCharacter {
+                field: "worker_id",
+                ch,
+            });
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(WorldCycleError::Empty { field: "worker_id" });
         }
@@ -629,9 +636,15 @@ mod tests {
         assert!(FollowupRetryStatus::Running.allows_lease());
         assert!(!FollowupRetryStatus::Complete.allows_lease());
         assert!(FollowupRetryStatus::Exhausted.is_terminal());
+        assert_eq!(FollowupRetryStatus::Pending.as_str(), "pending");
+        assert_eq!(FollowupRetryStatus::Running.to_string(), "running");
         assert_eq!(
             FollowupRetryStatus::from_str("completed").unwrap(),
             FollowupRetryStatus::Complete
+        );
+        assert_eq!(
+            FollowupRetryStatus::from_str("unknown"),
+            Err(WorldCycleError::UnknownStatus("unknown".to_owned()))
         );
     }
 
@@ -661,6 +674,12 @@ mod tests {
             CycleRuntimeStatus::from_str("failed").unwrap(),
             CycleRuntimeStatus::AttentionRequired
         );
+        assert_eq!(CycleRuntimeStatus::Open.as_str(), "open");
+        assert_eq!(CycleRuntimeStatus::Finalizing.to_string(), "finalizing");
+        assert_eq!(
+            CycleRuntimeStatus::from_str("simulating").unwrap(),
+            CycleRuntimeStatus::Running
+        );
     }
 
     #[test]
@@ -672,6 +691,14 @@ mod tests {
         assert_eq!(
             backoff.delay_for_attempt_index(u64::MAX),
             Duration::from_secs(3600)
+        );
+        assert_eq!(
+            RetryBackoffPolicy::new(Duration::ZERO, Duration::from_secs(1), 1),
+            Err(WorldCycleError::InvalidBackoff)
+        );
+        assert_eq!(
+            RetryBackoffPolicy::new(Duration::from_secs(2), Duration::from_secs(1), 1),
+            Err(WorldCycleError::InvalidBackoff)
         );
     }
 
@@ -695,6 +722,75 @@ mod tests {
         assert_eq!(
             retention_cutoff_cycle(i64::MIN, NonZeroU32::new(24).unwrap()),
             i64::MIN
+        );
+    }
+
+    #[test]
+    fn worker_ids_statuses_and_errors_are_stable() {
+        let worker = WorkerId::new(" worker/1 ").unwrap();
+        assert_eq!(worker.as_str(), "worker/1");
+        assert_eq!(worker.to_string(), "worker/1");
+        assert_eq!(
+            WorkerId::new(" "),
+            Err(WorldCycleError::Empty { field: "worker_id" })
+        );
+        assert!(matches!(
+            WorkerId::new("x".repeat(129)),
+            Err(WorldCycleError::TooLong {
+                field: "worker_id",
+                len: 129,
+                max: 128
+            })
+        ));
+        assert_eq!(
+            WorkerId::new("bad worker"),
+            Err(WorldCycleError::InvalidCharacter {
+                field: "worker_id",
+                ch: ' '
+            })
+        );
+        assert_eq!(
+            WorkerId::new("worker/1\n"),
+            Err(WorldCycleError::InvalidCharacter {
+                field: "worker_id",
+                ch: '\n'
+            })
+        );
+
+        assert_eq!(CyclePhaseStatus::Pending.as_str(), "pending");
+        assert_eq!(CyclePhaseStatus::Complete.to_string(), "complete");
+        assert!(CyclePhaseStatus::Complete.is_terminal());
+        assert!(!CyclePhaseStatus::Failed.is_terminal());
+        assert_eq!(
+            CyclePhaseStatus::from_str("completed").unwrap(),
+            CyclePhaseStatus::Complete
+        );
+        assert_eq!(
+            WorldCycleError::InvalidLeaseTtl.to_string(),
+            "lease ttl must be positive"
+        );
+        assert_eq!(
+            WorldCycleError::UnknownStatus("weird".to_owned()).to_string(),
+            "unknown cycle status \"weird\""
+        );
+    }
+
+    #[test]
+    fn lease_helpers_cover_empty_and_finalizing_states() {
+        assert!(!lease_expiry_is_active(None, 100));
+        assert!(lease_expiry_is_active(Some(101), 100));
+        assert!(finalizing_lease_is_active(true, Some(101), 100));
+        assert!(!finalizing_lease_is_active(false, Some(101), 100));
+        assert!(owned_lease_is_active(Some("worker-a"), Some(101), 100));
+        assert!(!owned_lease_is_active(None, Some(101), 100));
+        assert_eq!(stale_cutoff_unix_seconds(100, Duration::from_secs(15)), 85);
+        assert_eq!(
+            stale_cutoff_unix_seconds(i64::MIN, Duration::from_secs(15)),
+            i64::MIN
+        );
+        assert_eq!(
+            LeasePolicy::new(WorkerId::new("worker-a").unwrap(), Duration::ZERO),
+            Err(WorldCycleError::InvalidLeaseTtl)
         );
     }
 }

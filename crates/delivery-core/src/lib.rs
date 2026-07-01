@@ -31,7 +31,11 @@ impl LeaseToken {
     ///
     /// Returns [`DeliveryError::InvalidLeaseToken`] for a blank token.
     pub fn new(value: impl AsRef<str>) -> Result<Self, DeliveryError> {
-        let value = value.as_ref().trim();
+        let value = value.as_ref();
+        if value.chars().any(char::is_control) {
+            return Err(DeliveryError::InvalidLeaseToken);
+        }
+        let value = value.trim();
         if value.is_empty() {
             return Err(DeliveryError::InvalidLeaseToken);
         }
@@ -328,6 +332,69 @@ mod tests {
             delay_for_completed_attempts(policy, 2),
             Duration::from_secs(10)
         );
+    }
+
+    #[test]
+    fn lease_tokens_trim_and_uuid_roundtrip() {
+        let token = LeaseToken::new(" lease-1 ").unwrap();
+        assert_eq!(token.as_str(), "lease-1");
+        assert_eq!(LeaseToken::new(" "), Err(DeliveryError::InvalidLeaseToken));
+        assert_eq!(
+            LeaseToken::new("lease-1\n"),
+            Err(DeliveryError::InvalidLeaseToken)
+        );
+
+        #[cfg(feature = "uuid")]
+        {
+            let uuid = uuid::Uuid::nil();
+            let token = LeaseToken::from_uuid(uuid);
+            assert_eq!(token.parse_uuid().unwrap(), uuid);
+            assert_eq!(
+                LeaseToken::new("not-a-uuid").unwrap().parse_uuid(),
+                Err(DeliveryError::InvalidLeaseToken)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_backoff_and_error_display_are_stable() {
+        assert_eq!(
+            BackoffPolicy::new(Duration::ZERO, Duration::from_secs(1), 1),
+            Err(DeliveryError::InvalidBackoff)
+        );
+        assert_eq!(
+            BackoffPolicy::new(Duration::from_secs(2), Duration::from_secs(1), 1),
+            Err(DeliveryError::InvalidBackoff)
+        );
+        assert_eq!(
+            BackoffPolicy::new(Duration::from_secs(1), Duration::from_secs(2), 0),
+            Err(DeliveryError::InvalidBackoff)
+        );
+        assert_eq!(
+            DeliveryError::InvalidLeaseToken.to_string(),
+            "lease token is invalid"
+        );
+        assert_eq!(
+            DeliveryError::InvalidBackoff.to_string(),
+            "backoff configuration is invalid"
+        );
+    }
+
+    #[test]
+    fn retry_schedule_delegates_completed_attempt_semantics() {
+        let policy = BackoffPolicy::new(Duration::from_secs(1), Duration::from_secs(8), 2).unwrap();
+        let schedule = RetrySchedule::new(policy);
+        assert_eq!(schedule.policy(), policy);
+        assert_eq!(schedule.delay_for_attempt(4), Duration::from_secs(8));
+        assert_eq!(
+            schedule.delay_for_completed_attempts(2),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            schedule.delay_for_completed_attempts_i32(2),
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(delay_for_completed_attempts_i32(policy, -1), None);
     }
 
     #[test]
