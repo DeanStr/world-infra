@@ -18,7 +18,7 @@ The first extraction wave covers:
 - rate-limit backend mechanics;
 - narrow transaction-bound SQLx scope helpers;
 - durable delivery worker vocabulary;
-- cycle, lease, and follow-up retry primitives;
+- cycle runtime status, lease, phase, and follow-up retry primitives;
 - product-neutral event envelope metadata;
 - event fanout source/outcome classification;
 - notification delivery channel, target, version, and provider outcome

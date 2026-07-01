@@ -266,6 +266,109 @@ impl FromStr for FollowupRetryStatus {
     }
 }
 
+/// Product-neutral runtime status for a world's cycle machinery.
+///
+/// This is display/control-plane vocabulary, not a storage schema. Products
+/// should derive it from their local clock rows, leases, pause controls, and
+/// recovery signals while preserving detailed local diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum CycleRuntimeStatus {
+    /// World is enabled and waiting for the next eligible cycle boundary.
+    Open,
+    /// A cycle worker owns active work before finalization.
+    Running,
+    /// The authoritative finalization boundary is active.
+    Finalizing,
+    /// Automatic cycle work is intentionally paused.
+    Paused,
+    /// Product-owned recovery or failed-state signals require attention.
+    AttentionRequired,
+}
+
+impl CycleRuntimeStatus {
+    /// Stable lowercase status label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Running => "running",
+            Self::Finalizing => "finalizing",
+            Self::Paused => "paused",
+            Self::AttentionRequired => "attention_required",
+        }
+    }
+}
+
+impl fmt::Display for CycleRuntimeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for CycleRuntimeStatus {
+    type Err = WorldCycleError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "open" | "ready" | "waiting" => Ok(Self::Open),
+            "running" | "simulating" | "processing" => Ok(Self::Running),
+            "finalizing" => Ok(Self::Finalizing),
+            "paused" => Ok(Self::Paused),
+            "attention_required" | "failed" | "stuck" => Ok(Self::AttentionRequired),
+            other => Err(WorldCycleError::UnknownStatus(other.to_owned())),
+        }
+    }
+}
+
+/// Product-owned cycle runtime facts used to derive [`CycleRuntimeStatus`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CycleRuntimeSignals {
+    /// Product has detected a failed or stuck condition that should outrank
+    /// normal lifecycle display.
+    pub attention_required: bool,
+    /// Product configuration intentionally disables cycle starts.
+    pub paused: bool,
+    /// Finalization lease or equivalent authoritative boundary is active.
+    pub finalizing_active: bool,
+    /// Run lease or equivalent pre-finalization work is active.
+    pub run_active: bool,
+}
+
+impl CycleRuntimeSignals {
+    /// Construct cycle runtime signals.
+    #[must_use]
+    pub const fn new(
+        attention_required: bool,
+        paused: bool,
+        finalizing_active: bool,
+        run_active: bool,
+    ) -> Self {
+        Self {
+            attention_required,
+            paused,
+            finalizing_active,
+            run_active,
+        }
+    }
+}
+
+/// Derive a product-neutral runtime status from product-owned signals.
+#[must_use]
+pub const fn derive_cycle_runtime_status(signals: CycleRuntimeSignals) -> CycleRuntimeStatus {
+    if signals.attention_required {
+        CycleRuntimeStatus::AttentionRequired
+    } else if signals.paused {
+        CycleRuntimeStatus::Paused
+    } else if signals.finalizing_active {
+        CycleRuntimeStatus::Finalizing
+    } else if signals.run_active {
+        CycleRuntimeStatus::Running
+    } else {
+        CycleRuntimeStatus::Open
+    }
+}
+
 /// Product-owned lease state using Unix-second expiry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseState<'a> {
@@ -529,6 +632,34 @@ mod tests {
         assert_eq!(
             FollowupRetryStatus::from_str("completed").unwrap(),
             FollowupRetryStatus::Complete
+        );
+    }
+
+    #[test]
+    fn cycle_runtime_status_uses_stable_precedence() {
+        assert_eq!(
+            derive_cycle_runtime_status(CycleRuntimeSignals::new(true, true, true, true)),
+            CycleRuntimeStatus::AttentionRequired
+        );
+        assert_eq!(
+            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, true, true, true)),
+            CycleRuntimeStatus::Paused
+        );
+        assert_eq!(
+            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, false, true, true)),
+            CycleRuntimeStatus::Finalizing
+        );
+        assert_eq!(
+            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, false, false, true)),
+            CycleRuntimeStatus::Running
+        );
+        assert_eq!(
+            derive_cycle_runtime_status(CycleRuntimeSignals::new(false, false, false, false)),
+            CycleRuntimeStatus::Open
+        );
+        assert_eq!(
+            CycleRuntimeStatus::from_str("failed").unwrap(),
+            CycleRuntimeStatus::AttentionRequired
         );
     }
 
