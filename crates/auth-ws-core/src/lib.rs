@@ -203,8 +203,7 @@ pub fn require_auth_nonce(expected: &AuthNonce, provided: Option<&str>) -> Resul
 pub struct ControlFrameRateLimit {
     max_frames: u32,
     window: Duration,
-    window_started_at: Option<Instant>,
-    used: u32,
+    accepted_at: Vec<Instant>,
 }
 
 impl ControlFrameRateLimit {
@@ -214,8 +213,7 @@ impl ControlFrameRateLimit {
         Self {
             max_frames,
             window,
-            window_started_at: None,
-            used: 0,
+            accepted_at: Vec::new(),
         }
     }
 
@@ -225,17 +223,12 @@ impl ControlFrameRateLimit {
         if self.max_frames == 0 || self.window.is_zero() {
             return false;
         }
-        let expired = self
-            .window_started_at
-            .is_none_or(|started_at| now.duration_since(started_at) >= self.window);
-        if expired {
-            self.window_started_at = Some(now);
-            self.used = 0;
-        }
-        if self.used >= self.max_frames {
+        self.accepted_at
+            .retain(|accepted_at| now.saturating_duration_since(*accepted_at) < self.window);
+        if self.accepted_at.len() >= self.max_frames as usize {
             return false;
         }
-        self.used += 1;
+        self.accepted_at.push(now);
         true
     }
 
@@ -261,11 +254,8 @@ impl ControlFrameRateLimit {
 #[must_use]
 pub fn bearer_header_from_ws_token(token: &str) -> String {
     let token = token.trim();
-    if token
-        .get(.."Bearer ".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Bearer "))
-    {
-        token.to_owned()
+    if let Ok(credential) = auth_primitives::parse_bearer_authorization(Some(token)) {
+        format!("Bearer {}", credential.token())
     } else {
         format!("Bearer {token}")
     }
@@ -290,6 +280,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bearer_header_from_ws_token(&frame.token), "Bearer abc");
+    }
+
+    #[test]
+    fn bearer_header_from_ws_token_canonicalizes_accepted_bearer_shapes() {
+        assert_eq!(bearer_header_from_ws_token("bearer   abc"), "Bearer abc");
+        assert_eq!(
+            bearer_header_from_ws_token("Bearer\u{00a0}abc"),
+            "Bearer abc"
+        );
     }
 
     #[test]
@@ -355,13 +354,14 @@ mod tests {
     }
 
     #[test]
-    fn control_rate_limit_resets_after_window() {
+    fn control_rate_limit_uses_sliding_window() {
         let start = Instant::now();
         let mut limit = ControlFrameRateLimit::new(2, Duration::from_secs(1));
         assert!(limit.allow_at(start));
-        assert!(limit.allow_at(start + Duration::from_millis(100)));
-        assert!(!limit.allow_at(start + Duration::from_millis(200)));
+        assert!(limit.allow_at(start + Duration::from_millis(900)));
+        assert!(!limit.allow_at(start + Duration::from_millis(950)));
         assert!(limit.allow_at(start + Duration::from_secs(1)));
+        assert!(!limit.allow_at(start + Duration::from_millis(1_001)));
 
         let mut zero_window = ControlFrameRateLimit::new(2, Duration::ZERO);
         assert!(!zero_window.allow_at(start));

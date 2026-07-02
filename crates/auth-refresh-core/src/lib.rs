@@ -727,31 +727,22 @@ impl RedisRefreshStore {
     pub async fn get(&self, token: &str) -> Result<Option<RefreshSession>, RefreshStoreError> {
         let key = store_key(&self.config, self.namespace.as_ref(), token)?;
         let mut conn = self.get_conn().await?;
-        let fields = self
+        let raw_fields = self
             .clear_conn_on_backend_error(
                 timeout_redis(
                     self.command_timeout,
                     redis::cmd("HGETALL")
                         .arg(&key)
-                        .query_async::<HashMap<String, String>>(&mut conn),
+                        .query_async::<HashMap<Vec<u8>, Vec<u8>>>(&mut conn),
                 )
                 .await,
             )
             .await?;
-        if fields.is_empty() {
+        if raw_fields.is_empty() {
             return Ok(None);
         }
-        match parse_session_hash(fields, &self.config) {
-            Ok(session) => Ok(Some(session)),
-            Err(_error) => {
-                let _ = timeout_redis(
-                    self.command_timeout,
-                    redis::cmd("DEL").arg(&key).query_async::<usize>(&mut conn),
-                )
-                .await;
-                Ok(None)
-            }
-        }
+        let fields = decode_session_hash(raw_fields)?;
+        parse_session_hash(fields, &self.config).map(Some)
     }
 
     /// Rotate a refresh token if and only if the old token maps to
@@ -894,6 +885,27 @@ async fn timeout_redis<T>(
 #[cfg(feature = "redis")]
 fn redis_error(error: redis::RedisError) -> RefreshStoreError {
     RefreshStoreError::Backend(error.to_string())
+}
+
+#[cfg(feature = "redis")]
+fn decode_session_hash(
+    fields: HashMap<Vec<u8>, Vec<u8>>,
+) -> Result<HashMap<String, String>, RefreshStoreError> {
+    let mut decoded = HashMap::with_capacity(fields.len());
+    for (field, value) in fields {
+        let field = String::from_utf8(field).map_err(|error| {
+            RefreshStoreError::InvalidStoredSession(format!(
+                "non-UTF-8 refresh session field: {error}"
+            ))
+        })?;
+        let value = String::from_utf8(value).map_err(|error| {
+            RefreshStoreError::InvalidStoredSession(format!(
+                "non-UTF-8 refresh session value for {field}: {error}"
+            ))
+        })?;
+        decoded.insert(field, value);
+    }
+    Ok(decoded)
 }
 
 #[cfg(feature = "redis")]
@@ -1392,19 +1404,63 @@ mod tests {
             .query_async::<bool>(&mut conn)
             .await
             .expect("bad payload ttl should set");
-        assert_eq!(
-            store
-                .get(&bad_token)
-                .await
-                .expect("bad payload get should succeed"),
-            None
-        );
+        assert!(matches!(
+            store.get(&bad_token).await,
+            Err(RefreshStoreError::InvalidStoredSession(_))
+        ));
         let exists = redis::cmd("EXISTS")
             .arg(&bad_key)
             .query_async::<usize>(&mut conn)
             .await
-            .expect("bad payload should be deleted");
-        assert_eq!(exists, 0);
+            .expect("bad payload key should be inspectable");
+        assert_eq!(exists, 1);
+        store
+            .delete(&bad_token)
+            .await
+            .expect("product-owned bad payload cleanup should succeed");
+
+        let invalid_utf8_token = mint_refresh_token();
+        let invalid_utf8_key = store
+            .key_for_token(&invalid_utf8_token)
+            .expect("invalid UTF-8 token key should build");
+        redis::cmd("HSET")
+            .arg(&invalid_utf8_key)
+            .arg(config.subject_id_field())
+            .arg("account-1")
+            .arg(config.session_id_field())
+            .arg(vec![0xff, 0xfe])
+            .arg(config.issued_at_unix_secs_field())
+            .arg("1700000000")
+            .arg(config.session_version_field())
+            .arg("2")
+            .query_async::<usize>(&mut conn)
+            .await
+            .expect("invalid UTF-8 payload should write");
+        redis::cmd("EXPIRE")
+            .arg(&invalid_utf8_key)
+            .arg(30)
+            .query_async::<bool>(&mut conn)
+            .await
+            .expect("invalid UTF-8 payload ttl should set");
+        let invalid_utf8_error = store
+            .get(&invalid_utf8_token)
+            .await
+            .expect_err("invalid UTF-8 payload should be classified as invalid stored session");
+        assert!(matches!(
+            invalid_utf8_error,
+            RefreshStoreError::InvalidStoredSession(_)
+        ));
+        assert!(invalid_utf8_error.should_discard_stored_payload());
+        let exists = redis::cmd("EXISTS")
+            .arg(&invalid_utf8_key)
+            .query_async::<usize>(&mut conn)
+            .await
+            .expect("invalid UTF-8 key should be inspectable");
+        assert_eq!(exists, 1);
+        store
+            .delete(&invalid_utf8_token)
+            .await
+            .expect("product-owned invalid UTF-8 cleanup should succeed");
 
         store
             .delete(&next_token)

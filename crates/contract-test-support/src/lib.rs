@@ -334,7 +334,7 @@ pub fn assert_response_code(
 /// absent. Returns [`ContractTestError::ExpectedObject`] when the operation or a
 /// security requirement item is not an object. Returns
 /// [`ContractTestError::JsonMismatch`] when `security` is present but not an
-/// array.
+/// array, or when a requirement value is not a valid scope array.
 pub fn assert_security_scheme_required(
     operation: &Value,
     scheme: impl AsRef<str>,
@@ -373,7 +373,7 @@ pub fn assert_security_scheme_required(
 /// absent. Returns [`ContractTestError::ExpectedObject`] when the operation or a
 /// security requirement item is not an object. Returns
 /// [`ContractTestError::JsonMismatch`] when `security` is present but not an
-/// array.
+/// array, or when a requirement value is not a valid scope array.
 pub fn assert_security_scheme_declared(
     operation: &Value,
     scheme: impl AsRef<str>,
@@ -421,10 +421,33 @@ fn security_requirements<'a>(
                 .ok_or_else(|| ContractTestError::ExpectedObject {
                     path: "security[]".to_owned(),
                 })?;
+        validate_security_requirement(requirement)?;
         parsed.push(requirement);
     }
 
     Ok(parsed)
+}
+
+fn validate_security_requirement(
+    requirement: &Map<String, Value>,
+) -> Result<(), ContractTestError> {
+    for (scheme, scopes) in requirement {
+        let scopes = scopes
+            .as_array()
+            .ok_or_else(|| ContractTestError::JsonMismatch {
+                expected: format!("security requirement {scheme:?} value array"),
+                actual: scopes.to_string(),
+            })?;
+        for scope in scopes {
+            if !scope.is_string() {
+                return Err(ContractTestError::JsonMismatch {
+                    expected: format!("security requirement {scheme:?} scope string"),
+                    actual: scope.to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Assert an OpenAPI operation description contains expected text.
@@ -686,6 +709,36 @@ mod tests {
             ),
             Err(ContractTestError::ExpectedObject {
                 path: "security[]".to_owned()
+            })
+        );
+        assert_eq!(
+            assert_security_scheme_required(
+                &parse_json(r#"{"security":[{"bearerAuth":null}],"responses":{}}"#).unwrap(),
+                "bearerAuth",
+            ),
+            Err(ContractTestError::JsonMismatch {
+                expected: "security requirement \"bearerAuth\" value array".to_owned(),
+                actual: "null".to_owned(),
+            })
+        );
+        assert_eq!(
+            assert_security_scheme_declared(
+                &parse_json(r#"{"security":[{"bearerAuth":"read"}],"responses":{}}"#).unwrap(),
+                "bearerAuth",
+            ),
+            Err(ContractTestError::JsonMismatch {
+                expected: "security requirement \"bearerAuth\" value array".to_owned(),
+                actual: "\"read\"".to_owned(),
+            })
+        );
+        assert_eq!(
+            assert_security_scheme_required(
+                &parse_json(r#"{"security":[{"bearerAuth":[123]}],"responses":{}}"#).unwrap(),
+                "bearerAuth",
+            ),
+            Err(ContractTestError::JsonMismatch {
+                expected: "security requirement \"bearerAuth\" scope string".to_owned(),
+                actual: "123".to_owned(),
             })
         );
     }
