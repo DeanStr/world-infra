@@ -395,7 +395,12 @@ pub fn parse_duration(name: impl AsRef<str>, value: impl AsRef<str>) -> Result<D
         value: value.to_owned(),
         message: error.to_string(),
     })?;
-    Ok(Duration::from_millis(units.saturating_mul(scale)))
+    let millis = units.checked_mul(scale).ok_or_else(|| EnvError::Invalid {
+        name: name.to_owned(),
+        value: value.to_owned(),
+        message: "duration is too large".to_owned(),
+    })?;
+    Ok(Duration::from_millis(millis))
 }
 
 /// Parse a comma-separated list, trimming whitespace and ignoring blank items.
@@ -465,6 +470,17 @@ mod tests {
         );
         assert_eq!(parse_duration("T", "2").unwrap(), Duration::from_secs(2));
         assert_eq!(parse_duration("T", "3m").unwrap(), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn duration_parsing_rejects_overflow_instead_of_saturating() {
+        for value in [
+            "18446744073709551615s",
+            "18446744073709551615m",
+            "18446744073709551615h",
+        ] {
+            assert!(parse_duration("T", value).is_err());
+        }
     }
 
     #[test]

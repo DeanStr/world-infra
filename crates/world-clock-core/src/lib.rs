@@ -107,7 +107,7 @@ impl Cadence {
     /// Calculate the next due time from a last-run timestamp.
     #[must_use]
     pub fn next_due_after(self, last_due: SystemTime) -> SystemTime {
-        last_due + self.duration
+        system_time_saturating_add(last_due, self.duration)
     }
 
     /// Return true when `now` is on or after the next due time.
@@ -121,6 +121,19 @@ impl Cadence {
 #[must_use]
 pub fn cutoff_before(due_at: SystemTime, cutoff: Duration) -> SystemTime {
     due_at.checked_sub(cutoff).unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn system_time_saturating_add(time: SystemTime, duration: Duration) -> SystemTime {
+    let mut duration = duration;
+    loop {
+        if let Some(next) = time.checked_add(duration) {
+            return next;
+        }
+        duration /= 2;
+        if duration.is_zero() {
+            return time;
+        }
+    }
 }
 
 /// Deterministic seed helper based on FNV-1a over product-provided labels.
@@ -173,6 +186,13 @@ mod tests {
         );
         assert!(!cadence.is_due(last, SystemTime::UNIX_EPOCH + Duration::from_secs(159)));
         assert!(cadence.is_due(last, SystemTime::UNIX_EPOCH + Duration::from_secs(160)));
+    }
+
+    #[test]
+    fn cadence_due_time_saturates_extreme_duration() {
+        let cadence = Cadence::new(Duration::MAX).unwrap();
+        let due = cadence.next_due_after(SystemTime::UNIX_EPOCH);
+        assert!(due > SystemTime::UNIX_EPOCH);
     }
 
     #[test]

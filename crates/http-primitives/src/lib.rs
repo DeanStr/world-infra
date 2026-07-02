@@ -126,12 +126,10 @@ fn parse_host_port(value: &str) -> Result<(String, Option<u16>), HttpPrimitiveEr
         let port = if tail.is_empty() {
             None
         } else {
-            Some(
+            Some(parse_origin_port(
                 tail.strip_prefix(':')
-                    .ok_or(HttpPrimitiveError::InvalidOrigin)?
-                    .parse::<u16>()
-                    .map_err(|_| HttpPrimitiveError::InvalidOrigin)?,
-            )
+                    .ok_or(HttpPrimitiveError::InvalidOrigin)?,
+            )?)
         };
         let host = host
             .strip_prefix('[')
@@ -151,9 +149,7 @@ fn parse_host_port(value: &str) -> Result<(String, Option<u16>), HttpPrimitiveEr
         if !valid_unbracketed_origin_host(host) {
             return Err(HttpPrimitiveError::InvalidOrigin);
         }
-        let port = port
-            .parse::<u16>()
-            .map_err(|_| HttpPrimitiveError::InvalidOrigin)?;
+        let port = parse_origin_port(port)?;
         return Ok((host.to_owned(), Some(port)));
     }
     if !valid_unbracketed_origin_host(value) {
@@ -162,14 +158,32 @@ fn parse_host_port(value: &str) -> Result<(String, Option<u16>), HttpPrimitiveEr
     Ok((value.to_owned(), None))
 }
 
+fn parse_origin_port(port: &str) -> Result<u16, HttpPrimitiveError> {
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| HttpPrimitiveError::InvalidOrigin)?;
+    if port == 0 {
+        return Err(HttpPrimitiveError::InvalidOrigin);
+    }
+    Ok(port)
+}
+
 fn valid_unbracketed_origin_host(host: &str) -> bool {
     !host.is_empty()
         && !host.starts_with('.')
         && !host.ends_with('.')
         && !host.contains("..")
-        && host
-            .chars()
-            .all(|ch| ch.is_ascii_graphic() && !matches!(ch, '/' | '?' | '#' | '@' | '[' | ']'))
+        && host.split('.').all(valid_origin_host_label)
+}
+
+fn valid_origin_host_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 /// Parse comma-separated allowed origins.
@@ -452,11 +466,23 @@ fn parse_forwarded_entry(entry: &str) -> HeaderClientIp {
             continue;
         };
         if name.eq_ignore_ascii_case("for") {
-            return parse_ip_token(raw.trim_matches('"'))
-                .map_or(HeaderClientIp::Invalid, HeaderClientIp::Found);
+            let Some(raw) = unquote_forwarded_value(raw.trim()) else {
+                return HeaderClientIp::Invalid;
+            };
+            return parse_ip_token(raw).map_or(HeaderClientIp::Invalid, HeaderClientIp::Found);
         }
     }
     HeaderClientIp::Invalid
+}
+
+fn unquote_forwarded_value(value: &str) -> Option<&str> {
+    if let Some(value) = value.strip_prefix('"') {
+        value.strip_suffix('"')
+    } else if value.ends_with('"') {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn parse_x_forwarded_for(value: Option<&str>, trusted_proxies: &[Cidr]) -> HeaderClientIp {
@@ -493,7 +519,10 @@ fn parse_single_ip_header(value: Option<&str>) -> HeaderClientIp {
 }
 
 fn parse_ip_token(value: &str) -> Option<IpAddr> {
-    let value = value.trim().trim_matches('"');
+    let value = value.trim();
+    if value.starts_with('"') || value.ends_with('"') {
+        return None;
+    }
     if value.starts_with('[') {
         let (host, tail) = value.split_once(']')?;
         let host = host.strip_prefix('[')?;
@@ -701,6 +730,24 @@ mod tests {
     }
 
     #[test]
+    fn malformed_quoted_forwarded_ip_falls_back_to_peer() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        for forwarded in [
+            r#"for="203.0.113.10;proto=https"#,
+            r#"for=203.0.113.10";proto=https"#,
+        ] {
+            let client = extract_client_ip(
+                "10.1.1.1".parse().unwrap(),
+                &proxies,
+                Some(forwarded),
+                None,
+                None,
+            );
+            assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
+        }
+    }
+
+    #[test]
     fn forwarded_walks_from_trusted_proxy_side() {
         let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
         let client = extract_client_ip(
@@ -760,6 +807,19 @@ mod tests {
             &proxies,
             None,
             Some("[2001:db8::1]junk"),
+            None,
+        );
+        assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn quoted_x_forwarded_for_falls_back_to_peer() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            None,
+            Some(r#""203.0.113.10""#),
             None,
         );
         assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
@@ -831,6 +891,19 @@ mod tests {
     }
 
     #[test]
+    fn quoted_x_real_ip_falls_back_to_peer() {
+        let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
+        let client = extract_client_ip(
+            "10.1.1.1".parse().unwrap(),
+            &proxies,
+            None,
+            None,
+            Some(r#""203.0.113.10""#),
+        );
+        assert_eq!(client, "10.1.1.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
     fn valid_bracketed_forwarded_ip_with_port_is_allowed() {
         let proxies = parse_trusted_proxies("10.0.0.0/8").unwrap();
         let client = extract_client_ip(
@@ -883,6 +956,7 @@ mod tests {
         assert!(parse_allowed_origins("https://[not-an-ip]:443").is_err());
         assert!(parse_allowed_origins("https://[[2001:db8::1]:443").is_err());
         assert!(parse_allowed_origins("https://[[2001:db8::1]]:443").is_err());
+        assert!(parse_allowed_origins("https://[2001:db8::1]:0").is_err());
         assert!(parse_allowed_origins("https://[2001:db8::1]:443").is_ok());
     }
 
@@ -908,6 +982,10 @@ mod tests {
         assert!(parse_allowed_origins("https://.example.com").is_err());
         assert!(parse_allowed_origins("https://example.com.").is_err());
         assert!(parse_allowed_origins("https://example..com").is_err());
+        assert!(parse_allowed_origins("https://-example.com").is_err());
+        assert!(parse_allowed_origins("https://example-.com").is_err());
+        assert!(parse_allowed_origins("https://exa_mple.com").is_err());
+        assert!(parse_allowed_origins("https://example.com:0").is_err());
     }
 
     #[test]

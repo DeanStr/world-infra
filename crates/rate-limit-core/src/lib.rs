@@ -145,21 +145,21 @@ fn parse_window(value: &str, mode: WindowParseMode) -> Result<Duration, LimitPar
         "d" | "day" | "days" => return Ok(Duration::from_secs(86_400)),
         _ => {}
     }
-    let (number, scale) = if let Some(number) = value.strip_suffix("ms") {
-        (number, Duration::from_millis(1))
+    let (number, scale_millis) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 1)
     } else if let Some(number) = value.strip_suffix('s') {
-        (number, Duration::from_secs(1))
+        (number, 1_000)
     } else if let Some(number) = value.strip_suffix('m') {
-        (number, Duration::from_secs(60))
+        (number, 60_000)
     } else if let Some(number) = value.strip_suffix('h') {
-        (number, Duration::from_secs(3600))
+        (number, 3_600_000)
     } else if let Some(number) = value.strip_suffix('d') {
-        (number, Duration::from_secs(86_400))
+        (number, 86_400_000)
     } else {
         if mode == WindowParseMode::StrictSuffix {
             return Err(LimitParseError::InvalidWindow);
         }
-        (value.as_str(), Duration::from_secs(1))
+        (value.as_str(), 1_000)
     };
     let units = number
         .trim()
@@ -168,7 +168,10 @@ fn parse_window(value: &str, mode: WindowParseMode) -> Result<Duration, LimitPar
     if units == 0 {
         return Err(LimitParseError::InvalidWindow);
     }
-    Ok(scale.saturating_mul(u32::try_from(units).unwrap_or(u32::MAX)))
+    let millis = units
+        .checked_mul(scale_millis)
+        .ok_or(LimitParseError::InvalidWindow)?;
+    Ok(Duration::from_millis(millis))
 }
 
 /// Stable namespace wrapper.
@@ -922,6 +925,25 @@ mod tests {
             LimitParseError::InvalidWindow.to_string(),
             "limit window is invalid"
         );
+    }
+
+    #[test]
+    fn limit_specs_reject_window_overflow_instead_of_saturating() {
+        assert_eq!(
+            parse_limit_spec("10/4294967296ms"),
+            Ok(LimitSpec::Fixed {
+                count: NonZeroU32::new(10).unwrap(),
+                window: Duration::from_millis(4_294_967_296)
+            })
+        );
+        for value in [
+            "10/18446744073709551615s",
+            "10/18446744073709551615m",
+            "10/18446744073709551615h",
+            "10/18446744073709551615d",
+        ] {
+            assert_eq!(parse_limit_spec(value), Err(LimitParseError::InvalidWindow));
+        }
     }
 
     #[test]

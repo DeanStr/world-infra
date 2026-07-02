@@ -152,6 +152,19 @@ fn ttl_duration(ttl: Duration) -> Duration {
     }
 }
 
+fn instant_saturating_add(now: std::time::Instant, duration: Duration) -> std::time::Instant {
+    let mut duration = duration;
+    loop {
+        if let Some(expires_at) = now.checked_add(duration) {
+            return expires_at;
+        }
+        duration /= 2;
+        if duration.is_zero() {
+            return now;
+        }
+    }
+}
+
 #[cfg(feature = "redis")]
 fn ttl_secs_ceil(ttl: Duration) -> u64 {
     let ttl = ttl_duration(ttl);
@@ -237,7 +250,7 @@ impl InMemoryIdempotencyStore {
     ) -> Result<bool, IdempotencyRuntimeError> {
         let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let now = std::time::Instant::now();
-        let expires_at = now + ttl_duration(ttl);
+        let expires_at = instant_saturating_add(now, ttl_duration(ttl));
         let mut state = self
             .state
             .lock()
@@ -276,7 +289,7 @@ impl InMemoryIdempotencyStore {
     ) -> Result<WorkClaim, IdempotencyRuntimeError> {
         let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
         let now = std::time::Instant::now();
-        let expires_at = now + ttl_duration(ttl);
+        let expires_at = instant_saturating_add(now, ttl_duration(ttl));
         let mut state = self
             .state
             .lock()
@@ -313,7 +326,8 @@ impl InMemoryIdempotencyStore {
         ttl: Duration,
     ) -> Result<(), IdempotencyRuntimeError> {
         let key = namespaced_key(self.namespace.as_ref(), key, self.key_format)?;
-        let expires_at = std::time::Instant::now() + ttl_duration(ttl);
+        let now = std::time::Instant::now();
+        let expires_at = instant_saturating_add(now, ttl_duration(ttl));
         let mut state = self
             .state
             .lock()
@@ -885,6 +899,24 @@ mod tests {
                 .unwrap(),
             WorkClaim::Completed
         );
+    }
+
+    #[tokio::test]
+    async fn in_memory_extreme_ttl_does_not_panic() {
+        let store = InMemoryIdempotencyStore::new();
+        assert!(store.set_once("huge-marker", Duration::MAX).await.unwrap());
+        assert_eq!(
+            store
+                .claim_pending("huge-marker", Duration::MAX)
+                .await
+                .unwrap(),
+            WorkClaim::Completed
+        );
+        store
+            .mark_completed("huge-complete", Duration::MAX)
+            .await
+            .unwrap();
+        assert!(store.exists("huge-complete").await.unwrap());
     }
 
     #[cfg(feature = "redis")]

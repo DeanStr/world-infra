@@ -65,7 +65,9 @@ impl SettingName {
 
 fn is_unquoted_identifier(value: &str) -> bool {
     let mut chars = value.chars();
-    matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase() || ch == '_')
+    !value.is_empty()
+        && value.len() <= 63
+        && matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase() || ch == '_')
         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
 }
 
@@ -400,6 +402,7 @@ mod tests {
         assert!(SettingName::new(".app").is_err());
         assert!(SettingName::new("app.").is_err());
         assert!(SettingName::new("a".repeat(129)).is_err());
+        assert!(SettingName::new(format!("app.{}", "a".repeat(64))).is_err());
     }
 
     #[test]

@@ -222,7 +222,8 @@ fn validate_cookie_name(name: &str) -> Result<(), AuthHttpError> {
 fn validate_cookie_value(value: &str) -> Result<(), AuthHttpError> {
     if value.is_empty()
         || value.bytes().any(|byte| {
-            byte.is_ascii_control()
+            !byte.is_ascii()
+                || byte.is_ascii_control()
                 || byte.is_ascii_whitespace()
                 || matches!(byte, b'"' | b';' | b',' | b'\\')
         })
@@ -236,7 +237,7 @@ fn validate_cookie_path(path: &str) -> Result<(), AuthHttpError> {
     if !path.starts_with('/')
         || path
             .bytes()
-            .any(|byte| byte.is_ascii_control() || byte == b';')
+            .any(|byte| !byte.is_ascii() || byte.is_ascii_control() || byte == b';')
     {
         return Err(AuthHttpError::InvalidCookiePath);
     }
@@ -251,13 +252,21 @@ fn validate_cookie_domain(domain: &str) -> Result<(), AuthHttpError> {
         || domain.starts_with('.')
         || domain.ends_with('.')
         || domain.contains("..")
-        || domain
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.')))
+        || !domain.split('.').all(valid_cookie_domain_label)
     {
         return Err(AuthHttpError::InvalidCookieDomain);
     }
     Ok(())
+}
+
+fn valid_cookie_domain_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 /// Trusted-origin policy for cookie-auth endpoints.
@@ -333,7 +342,7 @@ impl TrustedOriginPolicy {
 }
 
 fn normalize_origin(origin: &str) -> Result<String, AuthHttpError> {
-    let origin = origin.trim().trim_end_matches('/');
+    let origin = origin.trim();
     if origin.is_empty() || origin.bytes().any(|byte| byte.is_ascii_control()) {
         return Err(AuthHttpError::UntrustedOrigin);
     }
@@ -489,6 +498,10 @@ mod tests {
             config.build_set_cookie("bad token"),
             Err(AuthHttpError::InvalidCookieValue)
         );
+        assert_eq!(
+            config.build_set_cookie("caf\u{e9}"),
+            Err(AuthHttpError::InvalidCookieValue)
+        );
         let bad = RefreshCookieConfig {
             secure: false,
             ..config
@@ -520,6 +533,31 @@ mod tests {
             bad_domain.validate(),
             Err(AuthHttpError::InvalidCookieDomain)
         );
+        let bad_path = RefreshCookieConfig {
+            name: "refresh".to_owned(),
+            path: "/caf\u{e9}".to_owned(),
+            domain: None,
+            secure: true,
+            http_only: true,
+            same_site: SameSite::Lax,
+            max_age: Duration::from_secs(60),
+        };
+        assert_eq!(bad_path.validate(), Err(AuthHttpError::InvalidCookiePath));
+        for domain in ["-example.com", "example-.com", "example.-com"] {
+            let bad_domain = RefreshCookieConfig {
+                name: "refresh".to_owned(),
+                path: "/".to_owned(),
+                domain: Some(domain.to_owned()),
+                secure: true,
+                http_only: true,
+                same_site: SameSite::Lax,
+                max_age: Duration::from_secs(60),
+            };
+            assert_eq!(
+                bad_domain.validate(),
+                Err(AuthHttpError::InvalidCookieDomain)
+            );
+        }
     }
 
     #[test]
@@ -541,10 +579,14 @@ mod tests {
         assert!(TrustedOriginPolicy::new(["https://exa[mple.com"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://a..b.example"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://app.example.com\\evil"]).is_err());
+        assert!(TrustedOriginPolicy::new(["https://app.example.com/"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://user@app.example.com"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://[not-ip]"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://[::1]:443"]).is_ok());
         assert!(TrustedOriginPolicy::new(["HTTPS://APP.EXAMPLE.COM"]).is_ok());
+
+        let policy = TrustedOriginPolicy::new(["https://app.example.com"]).unwrap();
+        assert!(!policy.is_trusted(Some("https://app.example.com/"), None));
     }
 
     #[test]

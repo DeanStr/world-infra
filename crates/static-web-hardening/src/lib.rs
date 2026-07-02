@@ -335,7 +335,9 @@ fn valid_host_label(label: &str) -> bool {
 }
 
 fn valid_port(port: &str) -> bool {
-    !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) && port.parse::<u16>().is_ok()
+    !port.is_empty()
+        && port.chars().all(|ch| ch.is_ascii_digit())
+        && port.parse::<u16>().is_ok_and(|port| port != 0)
 }
 
 fn validate_host_policy(
@@ -536,7 +538,7 @@ pub fn parse_static_headers(input: &str) -> Vec<StaticHeader> {
             }
             let (name, value) = line.split_once(':')?;
             let name = name.trim();
-            if name.is_empty() {
+            if !valid_header_name(name) {
                 return None;
             }
             Some(StaticHeader {
@@ -545,6 +547,30 @@ pub fn parse_static_headers(input: &str) -> Vec<StaticHeader> {
             })
         })
         .collect()
+}
+
+fn valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 /// Return whether a public config key/value pair looks secret-like.
@@ -845,6 +871,7 @@ mod tests {
             "https://-a.example",
             "https://a-.example",
             "https://a_b.example",
+            "https://example.com:0",
         ] {
             assert!(
                 matches!(
@@ -871,6 +898,8 @@ mod tests {
 # comment
 Content-Security-Policy: default-src 'self'
 X-Frame-Options: DENY
+Bad Header: nope
+Bad@Header: nope
 malformed
 "#,
         );

@@ -266,11 +266,90 @@ fn scan_source_inner(
 }
 
 fn is_allowed(lines: &[&str], index: usize, allow_prefix: &str) -> bool {
-    lines[index].contains(allow_prefix)
+    is_allow_comment(lines[index], allow_prefix)
         || index
             .checked_sub(1)
             .and_then(|previous| lines.get(previous))
-            .is_some_and(|line| line.contains(allow_prefix))
+            .is_some_and(|line| is_allow_comment(line, allow_prefix))
+}
+
+fn is_allow_comment(line: &str, allow_prefix: &str) -> bool {
+    line_comment(line).is_some_and(|comment| comment.contains(allow_prefix))
+}
+
+fn line_comment(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'/' && bytes[index + 1] == b'/' {
+            return line.get(index..);
+        }
+        if let Some(end) = string_literal_end(bytes, index) {
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn string_literal_end(bytes: &[u8], index: usize) -> Option<usize> {
+    if bytes[index] == b'"' {
+        return quoted_string_end(bytes, index + 1);
+    }
+    if bytes[index] == b'b' && bytes.get(index + 1) == Some(&b'"') {
+        return quoted_string_end(bytes, index + 2);
+    }
+    raw_string_literal_end(bytes, index).or_else(|| {
+        if bytes[index] == b'b' {
+            raw_string_literal_end(bytes, index + 1)
+        } else {
+            None
+        }
+    })
+}
+
+fn quoted_string_end(bytes: &[u8], mut index: usize) -> Option<usize> {
+    let mut escaped = false;
+    while index < bytes.len() {
+        if escaped {
+            escaped = false;
+        } else if bytes[index] == b'\\' {
+            escaped = true;
+        } else if bytes[index] == b'"' {
+            return Some(index + 1);
+        }
+        index += 1;
+    }
+    Some(bytes.len())
+}
+
+fn raw_string_literal_end(bytes: &[u8], index: usize) -> Option<usize> {
+    if bytes.get(index) != Some(&b'r') {
+        return None;
+    }
+    let mut hashes = 0;
+    let mut cursor = index + 1;
+    while bytes.get(cursor) == Some(&b'#') {
+        hashes += 1;
+        cursor += 1;
+    }
+    if bytes.get(cursor) != Some(&b'"') {
+        return None;
+    }
+    cursor += 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"'
+            && bytes
+                .get(cursor + 1..cursor + 1 + hashes)
+                .is_some_and(|tail| tail.iter().all(|byte| *byte == b'#'))
+        {
+            return Some(cursor + 1 + hashes);
+        }
+        cursor += 1;
+    }
+    Some(bytes.len())
 }
 
 fn nearby_sensitive_table(
@@ -399,6 +478,68 @@ fn query() {
             sqlx::query("select * from world_cycle_jobs")
                 // scoped-sqlx-lint: allow public audit query
                 .fetch_all(&self.pool)
+                .await?;
+        "#;
+        assert!(scan_source(source, &config).unwrap().is_empty());
+    }
+
+    #[test]
+    fn trailing_allow_comment_suppresses_current_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r#"
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool) // scoped-sqlx-lint: allow public audit query
+                .await?;
+        "#;
+        assert!(scan_source(source, &config).unwrap().is_empty());
+    }
+
+    #[test]
+    fn allow_marker_inside_string_does_not_suppress_next_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r#"
+            let marker = "scoped-sqlx-lint: allow";
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool)
+                .await?;
+        "#;
+        let findings = scan_source(source, &config).unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn allow_marker_inside_string_comment_text_does_not_suppress_next_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r#"
+            let marker = "// scoped-sqlx-lint: allow";
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool)
+                .await?;
+        "#;
+        let findings = scan_source(source, &config).unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn allow_marker_inside_raw_string_comment_text_does_not_suppress_next_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r##"
+            let marker = r#"// scoped-sqlx-lint: allow"#;
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool)
+                .await?;
+        "##;
+        let findings = scan_source(source, &config).unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn trailing_allow_comment_after_lifetime_suppresses_current_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r#"
+            let _name: &'static str = "reviewed";
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool) // scoped-sqlx-lint: allow public audit query
                 .await?;
         "#;
         assert!(scan_source(source, &config).unwrap().is_empty());

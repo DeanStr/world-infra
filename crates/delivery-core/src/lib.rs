@@ -29,14 +29,15 @@ impl LeaseToken {
     ///
     /// # Errors
     ///
-    /// Returns [`DeliveryError::InvalidLeaseToken`] for a blank token.
+    /// Returns [`DeliveryError::InvalidLeaseToken`] for a blank or whitespace
+    /// containing token.
     pub fn new(value: impl AsRef<str>) -> Result<Self, DeliveryError> {
         let value = value.as_ref();
         if value.chars().any(char::is_control) {
             return Err(DeliveryError::InvalidLeaseToken);
         }
         let value = value.trim();
-        if value.is_empty() {
+        if value.is_empty() || value.chars().any(char::is_whitespace) {
             return Err(DeliveryError::InvalidLeaseToken);
         }
         Ok(Self(value.to_owned()))
@@ -270,11 +271,18 @@ impl DeliveryRunReport {
     /// Record one attempt outcome.
     pub fn record(&mut self, outcome: &DeliveryAttemptOutcome) {
         match outcome {
-            DeliveryAttemptOutcome::Delivered => self.delivered += 1,
-            DeliveryAttemptOutcome::RetryableFailure { .. } => self.retryable_failed += 1,
-            DeliveryAttemptOutcome::PermanentFailure => self.permanently_failed += 1,
+            DeliveryAttemptOutcome::Delivered => {
+                self.delivered = self.delivered.saturating_add(1);
+            }
+            DeliveryAttemptOutcome::RetryableFailure { .. } => {
+                self.retryable_failed = self.retryable_failed.saturating_add(1);
+            }
+            DeliveryAttemptOutcome::PermanentFailure => {
+                self.permanently_failed = self.permanently_failed.saturating_add(1);
+            }
             DeliveryAttemptOutcome::AmbiguousAfterSideEffect => {
-                self.ambiguous_after_side_effect += 1;
+                self.ambiguous_after_side_effect =
+                    self.ambiguous_after_side_effect.saturating_add(1);
             }
         }
     }
@@ -341,6 +349,10 @@ mod tests {
         assert_eq!(LeaseToken::new(" "), Err(DeliveryError::InvalidLeaseToken));
         assert_eq!(
             LeaseToken::new("lease-1\n"),
+            Err(DeliveryError::InvalidLeaseToken)
+        );
+        assert_eq!(
+            LeaseToken::new("lease token"),
             Err(DeliveryError::InvalidLeaseToken)
         );
 
@@ -418,6 +430,26 @@ mod tests {
         report.record(&DeliveryAttemptOutcome::AmbiguousAfterSideEffect);
         assert_eq!(report.delivered, 1);
         assert_eq!(report.ambiguous_after_side_effect, 1);
+    }
+
+    #[test]
+    fn report_counters_saturate_at_maximum() {
+        let mut report = DeliveryRunReport {
+            delivered: u32::MAX,
+            retryable_failed: u32::MAX,
+            permanently_failed: u32::MAX,
+            ambiguous_after_side_effect: u32::MAX,
+            ..DeliveryRunReport::default()
+        };
+        report.record(&DeliveryAttemptOutcome::Delivered);
+        report.record(&DeliveryAttemptOutcome::RetryableFailure { retry_after: None });
+        report.record(&DeliveryAttemptOutcome::PermanentFailure);
+        report.record(&DeliveryAttemptOutcome::AmbiguousAfterSideEffect);
+
+        assert_eq!(report.delivered, u32::MAX);
+        assert_eq!(report.retryable_failed, u32::MAX);
+        assert_eq!(report.permanently_failed, u32::MAX);
+        assert_eq!(report.ambiguous_after_side_effect, u32::MAX);
     }
 
     #[test]

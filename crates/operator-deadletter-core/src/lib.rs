@@ -117,12 +117,12 @@ impl OperatorRunReport {
 
     /// Record a per-item result.
     pub fn record<Id>(&mut self, result: &OperatorActionResult<Id>) {
-        self.inspected += 1;
+        self.inspected = self.inspected.saturating_add(1);
         if !matches!(result.action, OperatorAction::Noop) {
-            self.eligible += 1;
+            self.eligible = self.eligible.saturating_add(1);
         }
         if result.changed {
-            self.changed += 1;
+            self.changed = self.changed.saturating_add(1);
         }
         if let Some(warning) = &result.warning {
             self.warnings.push(warning.clone());
@@ -185,5 +185,25 @@ mod tests {
         assert_eq!(report.eligible, 1);
         assert_eq!(report.changed, 1);
         assert!(!report.needs_attention());
+    }
+
+    #[test]
+    fn report_counters_saturate_at_maximum() {
+        let mut report = OperatorRunReport {
+            inspected: usize::MAX,
+            eligible: usize::MAX,
+            changed: usize::MAX,
+            ..OperatorRunReport::default()
+        };
+        report.record(&OperatorActionResult {
+            id: "delivery-1",
+            action: OperatorAction::Retry,
+            changed: true,
+            warning: None,
+        });
+
+        assert_eq!(report.inspected, usize::MAX);
+        assert_eq!(report.eligible, usize::MAX);
+        assert_eq!(report.changed, usize::MAX);
     }
 }

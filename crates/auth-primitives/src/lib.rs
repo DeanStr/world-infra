@@ -451,12 +451,13 @@ impl<'a> BearerCredential<'a> {
 /// Parse an HTTP `Authorization` header as a bearer credential.
 ///
 /// The returned token borrows from the input header. This helper is deliberately
-/// strict about scheme shape and blank tokens, while leaving JWT decoding or
-/// opaque-token lookup to product-owned code.
+/// strict about scheme shape and RFC 6750 bearer-token characters, while
+/// leaving JWT decoding or opaque-token lookup to product-owned code.
 ///
 /// # Errors
 ///
-/// Returns [`AuthPrimitiveError`] for missing, non-bearer, or blank values.
+/// Returns [`AuthPrimitiveError`] for missing, non-bearer, blank, or unsafe
+/// values.
 pub fn parse_bearer_authorization(
     authorization: Option<&str>,
 ) -> Result<BearerCredential<'_>, AuthPrimitiveError> {
@@ -487,12 +488,17 @@ pub fn parse_bearer_authorization(
     if token
         .chars()
         .any(|ch| ch.is_control() || ch.is_whitespace())
+        || !token.bytes().all(is_bearer_token_byte)
     {
         return Err(AuthPrimitiveError::Invalid {
             field: "authorization",
         });
     }
     Ok(BearerCredential { token })
+}
+
+fn is_bearer_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/' | b'=')
 }
 
 /// Redact an access token or secret for logs.
@@ -768,6 +774,18 @@ mod tests {
         );
         assert_eq!(
             parse_bearer_authorization(Some("Bearer abc def")),
+            Err(AuthPrimitiveError::Invalid {
+                field: "authorization"
+            })
+        );
+        assert_eq!(
+            parse_bearer_authorization(Some("Bearer bad;token")),
+            Err(AuthPrimitiveError::Invalid {
+                field: "authorization"
+            })
+        );
+        assert_eq!(
+            parse_bearer_authorization(Some("Bearer café")),
             Err(AuthPrimitiveError::Invalid {
                 field: "authorization"
             })

@@ -113,7 +113,7 @@ struct RawInitialAuthFrame {
 ///
 /// # Errors
 ///
-/// Returns [`WsAuthError`] for oversized, malformed, non-auth, or blank-token
+/// Returns [`WsAuthError`] for oversized, malformed, non-auth, or unsafe-token
 /// frames.
 pub fn parse_initial_auth_text(
     text: &str,
@@ -142,9 +142,10 @@ fn valid_ws_token(token: &str) -> bool {
         return false;
     }
     if token.chars().any(char::is_whitespace) {
-        return auth_primitives::parse_bearer_authorization(Some(token)).is_ok();
+        auth_primitives::parse_bearer_authorization(Some(token)).is_ok()
+    } else {
+        auth_primitives::parse_bearer_authorization(Some(&format!("Bearer {token}"))).is_ok()
     }
-    true
 }
 
 /// Reject an initial binary auth frame.
@@ -168,11 +169,16 @@ impl AuthNonce {
     ///
     /// # Errors
     ///
-    /// Returns [`WsAuthError::InvalidAuthNonce`] for blank, whitespace-padded,
-    /// or control-character values.
+    /// Returns [`WsAuthError::InvalidAuthNonce`] for blank or whitespace/control
+    /// character values.
     pub fn new(value: impl AsRef<str>) -> Result<Self, WsAuthError> {
         let value = value.as_ref();
-        if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+        if value.is_empty()
+            || value.trim() != value
+            || value
+                .chars()
+                .any(|ch| ch.is_control() || ch.is_whitespace())
+        {
             return Err(WsAuthError::InvalidAuthNonce);
         }
         Ok(Self(value.to_owned()))
@@ -329,6 +335,13 @@ mod tests {
             Err(WsAuthError::MissingToken)
         );
         assert_eq!(
+            parse_initial_auth_text(
+                r#"{"messageType":"auth","token":"bad;token"}"#,
+                WsAuthConfig::default()
+            ),
+            Err(WsAuthError::MissingToken)
+        );
+        assert_eq!(
             reject_initial_auth_binary(),
             Err(WsAuthError::BinaryAuthFrame)
         );
@@ -349,6 +362,10 @@ mod tests {
         assert_eq!(AuthNonce::new(" "), Err(WsAuthError::InvalidAuthNonce));
         assert_eq!(
             AuthNonce::new(" nonce-1 "),
+            Err(WsAuthError::InvalidAuthNonce)
+        );
+        assert_eq!(
+            AuthNonce::new("nonce 1"),
             Err(WsAuthError::InvalidAuthNonce)
         );
     }

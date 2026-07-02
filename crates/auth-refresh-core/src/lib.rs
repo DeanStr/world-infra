@@ -324,8 +324,8 @@ pub fn mint_refresh_token() -> String {
 ///
 /// # Errors
 ///
-/// Returns [`RefreshStoreError::InvalidToken`] for blank/control-character
-/// tokens.
+/// Returns [`RefreshStoreError::InvalidToken`] for blank, oversized, or
+/// non-URL-safe tokens.
 pub fn hash_refresh_token(token: &str) -> Result<String, RefreshStoreError> {
     let token = validate_token(token)?;
     let mut hasher = Sha256::new();
@@ -350,6 +350,9 @@ fn validate_token(token: &str) -> Result<&str, RefreshStoreError> {
         || token
             .chars()
             .any(|ch| ch.is_control() || ch.is_whitespace())
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(RefreshStoreError::InvalidToken);
     }
@@ -406,6 +409,19 @@ fn ttl_duration(ttl: Duration) -> Duration {
         Duration::from_secs(1)
     } else {
         ttl
+    }
+}
+
+fn instant_saturating_add(now: std::time::Instant, duration: Duration) -> std::time::Instant {
+    let mut duration = duration;
+    loop {
+        if let Some(expires_at) = now.checked_add(duration) {
+            return expires_at;
+        }
+        duration /= 2;
+        if duration.is_zero() {
+            return now;
+        }
     }
 }
 
@@ -494,7 +510,8 @@ impl InMemoryRefreshStore {
         ttl: Duration,
     ) -> Result<(), RefreshStoreError> {
         let key = store_key(&self.config, self.namespace.as_ref(), token)?;
-        let expires_at = std::time::Instant::now() + ttl_duration(ttl);
+        let now = std::time::Instant::now();
+        let expires_at = instant_saturating_add(now, ttl_duration(ttl));
         self.entries
             .lock()
             .map_err(|error| RefreshStoreError::Backend(error.to_string()))?
@@ -553,7 +570,7 @@ impl InMemoryRefreshStore {
             return Ok(false);
         }
         let now = std::time::Instant::now();
-        let expires_at = now + ttl_duration(ttl);
+        let expires_at = instant_saturating_add(now, ttl_duration(ttl));
         let mut entries = self
             .entries
             .lock()
@@ -968,6 +985,14 @@ mod tests {
         let hash = hash_refresh_token(&token).unwrap();
         assert_eq!(hash.len(), 64);
         assert_ne!(hash, token);
+        assert_eq!(
+            hash_refresh_token("bad;token"),
+            Err(RefreshStoreError::InvalidToken)
+        );
+        assert_eq!(
+            hash_refresh_token("caf\u{e9}"),
+            Err(RefreshStoreError::InvalidToken)
+        );
     }
 
     #[test]
@@ -1096,6 +1121,32 @@ mod tests {
             .unwrap();
         std::thread::sleep(Duration::from_millis(3));
         assert_eq!(store.get(&token).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn in_memory_extreme_ttl_does_not_panic() {
+        let store = InMemoryRefreshStore::new();
+        let token = mint_refresh_token();
+        let session = sample_session();
+        store
+            .set(&token, session.clone(), Duration::MAX)
+            .await
+            .unwrap();
+        assert_eq!(store.get(&token).await.unwrap(), Some(session.clone()));
+
+        let next_token = mint_refresh_token();
+        let next_session = RefreshSession::new("account-1", "session-2", 1_700_000_001, 3).unwrap();
+        assert!(store
+            .rotate(
+                &token,
+                &next_token,
+                &session,
+                next_session.clone(),
+                Duration::MAX,
+            )
+            .await
+            .unwrap());
+        assert_eq!(store.get(&next_token).await.unwrap(), Some(next_session));
     }
 
     #[tokio::test]
