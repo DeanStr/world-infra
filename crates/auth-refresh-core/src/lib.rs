@@ -96,7 +96,7 @@ impl RefreshStoreConfig {
         issued_at_unix_secs_field: impl AsRef<str>,
         session_version_field: impl AsRef<str>,
     ) -> Result<Self, RefreshStoreError> {
-        Ok(Self {
+        let config = Self {
             key_prefix: validate_schema_part(key_prefix.as_ref())?.to_owned(),
             key_version: validate_schema_part(key_version.as_ref())?.to_owned(),
             subject_id_field: validate_schema_part(subject_id_field.as_ref())?.to_owned(),
@@ -104,7 +104,9 @@ impl RefreshStoreConfig {
             issued_at_unix_secs_field: validate_schema_part(issued_at_unix_secs_field.as_ref())?
                 .to_owned(),
             session_version_field: validate_schema_part(session_version_field.as_ref())?.to_owned(),
-        })
+        };
+        config.validate_distinct_session_fields()?;
+        Ok(config)
     }
 
     /// Return a copy with a different key version, such as `v3`.
@@ -138,7 +140,23 @@ impl RefreshStoreConfig {
             validate_schema_part(issued_at_unix_secs_field.as_ref())?.to_owned();
         self.session_version_field =
             validate_schema_part(session_version_field.as_ref())?.to_owned();
+        self.validate_distinct_session_fields()?;
         Ok(self)
+    }
+
+    fn validate_distinct_session_fields(&self) -> Result<(), RefreshStoreError> {
+        let fields = [
+            self.subject_id_field.as_str(),
+            self.session_id_field.as_str(),
+            self.issued_at_unix_secs_field.as_str(),
+            self.session_version_field.as_str(),
+        ];
+        for (index, field) in fields.iter().enumerate() {
+            if fields[..index].contains(field) {
+                return Err(RefreshStoreError::InvalidSchemaConfig);
+            }
+        }
+        Ok(())
     }
 
     /// Access the key prefix.
@@ -928,6 +946,19 @@ mod tests {
         );
         assert_eq!(
             RefreshStoreConfig::default().with_key_version(" v3 "),
+            Err(RefreshStoreError::InvalidSchemaConfig)
+        );
+        assert_eq!(
+            RefreshStoreConfig::default().with_session_fields(
+                "account_id",
+                "account_id",
+                "issued_at",
+                "session_version",
+            ),
+            Err(RefreshStoreError::InvalidSchemaConfig)
+        );
+        assert_eq!(
+            RefreshStoreConfig::new("rt", "v3", "id", "session_id", "issued_at", "id"),
             Err(RefreshStoreError::InvalidSchemaConfig)
         );
 

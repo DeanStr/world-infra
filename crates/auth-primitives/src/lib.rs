@@ -263,7 +263,7 @@ impl AuthClaimShape {
     /// Return whether this claim may be used for bearer API authentication.
     #[must_use]
     pub const fn accepted_as_bearer(&self) -> bool {
-        self.token_type.accepted_as_bearer()
+        self.token_type.accepted_as_bearer() && self.is_consistent()
     }
 }
 
@@ -411,6 +411,28 @@ mod tests {
             actor_session_version: Some(SessionVersion::new(2).unwrap()),
         };
         assert!(!claim.is_consistent());
+        assert!(!claim.accepted_as_bearer());
+    }
+
+    #[test]
+    fn bearer_claims_must_have_consistent_impersonation_shape() {
+        let malformed_impersonation = AuthClaimShape {
+            token_type: TokenType::Impersonation,
+            audience: Audience::new("chairman-api").unwrap(),
+            session_version: SessionVersion::new(1).unwrap(),
+            actor_session_version: None,
+        };
+        assert!(!malformed_impersonation.is_consistent());
+        assert!(!malformed_impersonation.accepted_as_bearer());
+
+        let valid_impersonation = AuthClaimShape {
+            token_type: TokenType::Impersonation,
+            audience: Audience::new("chairman-api").unwrap(),
+            session_version: SessionVersion::new(1).unwrap(),
+            actor_session_version: Some(SessionVersion::new(2).unwrap()),
+        };
+        assert!(valid_impersonation.is_consistent());
+        assert!(valid_impersonation.accepted_as_bearer());
     }
 
     #[test]

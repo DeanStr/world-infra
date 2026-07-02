@@ -388,9 +388,6 @@ pub fn validate_breached_password_file(
     options: BreachedPasswordFileOptions,
 ) -> Result<(), PasswordError> {
     validate_breach_file_metadata(path, options)?;
-    if !options.sorted {
-        return Ok(());
-    }
 
     let file = File::open(path).map_err(io_error)?;
     let mut previous_hash: Option<String> = None;
@@ -409,12 +406,14 @@ pub fn validate_breached_password_file(
                 idx + 1
             ))
         })?;
-        if let Some(previous_hash) = previous_hash.as_ref() {
-            if hash < *previous_hash {
-                return Err(PasswordError::BreachFile(format!(
-                    "breached password SHA-1 file is not sorted at line {}",
-                    idx + 1
-                )));
+        if options.sorted {
+            if let Some(previous_hash) = previous_hash.as_ref() {
+                if hash < *previous_hash {
+                    return Err(PasswordError::BreachFile(format!(
+                        "breached password SHA-1 file is not sorted at line {}",
+                        idx + 1
+                    )));
+                }
             }
         }
         previous_hash = Some(hash);
@@ -786,6 +785,44 @@ mod tests {
             }
         )
         .unwrap());
+    }
+
+    #[test]
+    fn unsorted_breach_file_validation_checks_entries_without_sorting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("breaches.txt");
+        std::fs::write(
+            &path,
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\n0000000000000000000000000000000000000000\n",
+        )
+        .unwrap();
+
+        assert!(
+            validate_breached_password_file(
+                &path,
+                BreachedPasswordFileOptions {
+                    sorted: false,
+                    ..BreachedPasswordFileOptions::default()
+                },
+            )
+            .is_ok(),
+            "unsorted validation should allow valid out-of-order hashes"
+        );
+
+        std::fs::write(
+            &path,
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\nnot-a-sha1\n",
+        )
+        .unwrap();
+        let error = validate_breached_password_file(
+            &path,
+            BreachedPasswordFileOptions {
+                sorted: false,
+                ..BreachedPasswordFileOptions::default()
+            },
+        )
+        .expect_err("unsorted validation should reject malformed lines");
+        assert!(error.to_string().contains("line 2"));
     }
 
     #[test]
