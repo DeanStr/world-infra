@@ -1,0 +1,2 @@
+# False-positive test fixture string from auth-password-core.
+a716d19559c81dbd3d878d172c50742787ee57d2:crates/auth-password-core/src/lib.rs:generic-api-key:680

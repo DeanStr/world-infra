@@ -677,8 +677,8 @@ mod tests {
 
     #[test]
     fn breach_file_lookup_supports_sorted_and_count_suffixed_files() {
-        let breached_password = "unique-breached-pass-12345";
-        let breached_hash = password_sha1_hex(breached_password);
+        let candidate = "sample breach phrase";
+        let breached_hash = password_sha1_hex(candidate);
         let mut hashes = [
             "0000000000000000000000000000000000000000".to_owned(),
             format!("{breached_hash}:42"),
@@ -710,7 +710,7 @@ mod tests {
             ..PasswordPolicy::default()
         };
         assert!(matches!(
-            policy.validate(breached_password),
+            policy.validate(candidate),
             Err(PasswordError::Breached)
         ));
     }
@@ -767,8 +767,8 @@ mod tests {
 
     #[test]
     fn breach_file_lookup_can_scan_unsorted_small_files() {
-        let breached_password = "unique-linear-breached-pass-12345";
-        let breached_hash = password_sha1_hex(breached_password);
+        let candidate = "linear breach phrase";
+        let breached_hash = password_sha1_hex(candidate);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("breaches.txt");
         std::fs::write(
