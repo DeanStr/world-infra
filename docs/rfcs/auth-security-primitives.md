@@ -61,6 +61,8 @@ Shared:
 - opaque refresh-token minting, hashing, TTL clamping, single-use rotation, and
   optional Redis backend mechanics;
 - configurable refresh Redis key version and hash-field names;
+- refresh lookup disposition helpers so invalid token input can map to generic
+  credential-miss responses without hiding internal errors from adapters;
 - invalid stored refresh-payload discard disposition helpers; products still
   own deletion, audit, metrics, and response text;
 - refresh-cookie string construction and trusted-origin exact matching;
@@ -103,7 +105,12 @@ assert!(shape.is_consistent());
 match store.get(refresh_token).await {
     Err(error) if error.should_discard_stored_payload() => {
         store.delete(refresh_token).await?;
-        // Force product-owned re-authentication response.
+        // Return the same product-owned unauthenticated response as an absent
+        // or expired refresh token.
+    }
+    Err(error) if error.should_treat_as_credential_miss() => {
+        // Return the same product-owned unauthenticated response as an absent
+        // or expired refresh token.
     }
     result => { /* product-owned handling */ }
 }
@@ -137,7 +144,7 @@ Shared tests:
   consistency, actor-session freshness wrappers;
 - refresh-token mint/hash, namespace validation, TTL clamping, set/get/delete,
   rotate/replay, same-token rotation rejection, configurable key/field schemas,
-  and invalid-stored-payload discard disposition;
+  lookup disposition, and invalid-stored-payload discard disposition;
 - Redis refresh backend coverage for set/get/delete, rotate/replay, expiry,
   bad stored payload deletion, namespace isolation, and configured `rt:v3`
   field names when `AUTH_REFRESH_REDIS_URL` or `WORLD_INFRA_REDIS_URL` is set;

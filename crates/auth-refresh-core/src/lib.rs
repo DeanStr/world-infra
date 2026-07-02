@@ -6,11 +6,13 @@
 //! lookup, cookie policy, access-token signing, session-version invalidation,
 //! and API response shapes.
 //!
-//! When a backend returns [`RefreshStoreError::InvalidStoredSession`], product
-//! adapters should normally delete the token key and force re-authentication:
-//! the stored payload is unusable and should not be retried forever. Keep that
-//! deletion in product code so audit/logging, metrics, and response text stay
-//! product-owned.
+//! Product-facing auth adapters should normally treat invalid refresh-token
+//! input as a credential miss: return the same unauthenticated response as an
+//! unknown token, without exposing parse/validation detail. When a backend
+//! returns [`RefreshStoreError::InvalidStoredSession`], adapters should
+//! normally delete the token key and force re-authentication: the stored payload
+//! is unusable and should not be retried forever. Keep deletion in product code
+//! so audit/logging, metrics, and response text stay product-owned.
 
 use std::{
     collections::HashMap,
@@ -63,12 +65,53 @@ impl fmt::Display for RefreshStoreError {
 
 impl Error for RefreshStoreError {}
 
+/// Product-facing disposition for refresh-token lookup errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RefreshLookupDisposition {
+    /// Treat like an unknown or expired credential in public auth responses.
+    CredentialMiss,
+    /// Retry or surface as temporary auth infrastructure failure.
+    RetryableBackendFailure,
+    /// Internal bug/configuration/data issue; products own logging and response.
+    InternalFailure,
+}
+
 impl RefreshStoreError {
     /// Return whether this error represents an invalid persisted payload that
     /// a product adapter should usually discard.
     #[must_use]
     pub const fn should_discard_stored_payload(&self) -> bool {
         matches!(self, Self::InvalidStoredSession(_))
+    }
+
+    /// Classify this error for product-facing refresh-token lookup responses.
+    ///
+    /// Public auth endpoints should usually map [`RefreshLookupDisposition::CredentialMiss`]
+    /// to the same generic unauthenticated response used for missing/expired
+    /// credentials, while still keeping the raw error available to tests,
+    /// metrics, admin tooling, and debug logs.
+    #[must_use]
+    pub const fn lookup_disposition(&self) -> RefreshLookupDisposition {
+        match self {
+            Self::InvalidToken | Self::InvalidStoredSession(_) => {
+                RefreshLookupDisposition::CredentialMiss
+            }
+            Self::Timeout | Self::Backend(_) => RefreshLookupDisposition::RetryableBackendFailure,
+            Self::InvalidNamespace
+            | Self::InvalidSchemaConfig
+            | Self::InvalidSessionField { .. } => RefreshLookupDisposition::InternalFailure,
+        }
+    }
+
+    /// Return whether a product-facing lookup should handle this like an
+    /// unknown, expired, or absent credential.
+    #[must_use]
+    pub const fn should_treat_as_credential_miss(&self) -> bool {
+        matches!(
+            self.lookup_disposition(),
+            RefreshLookupDisposition::CredentialMiss
+        )
     }
 }
 
@@ -992,6 +1035,34 @@ mod tests {
         assert!(!RefreshStoreError::Timeout.should_discard_stored_payload());
         assert!(!RefreshStoreError::Backend("redis unavailable".to_owned())
             .should_discard_stored_payload());
+    }
+
+    #[test]
+    fn lookup_disposition_keeps_public_auth_responses_generic() {
+        assert_eq!(
+            RefreshStoreError::InvalidToken.lookup_disposition(),
+            RefreshLookupDisposition::CredentialMiss
+        );
+        assert!(
+            RefreshStoreError::InvalidStoredSession("bad payload".to_owned())
+                .should_treat_as_credential_miss()
+        );
+        assert_eq!(
+            RefreshStoreError::Timeout.lookup_disposition(),
+            RefreshLookupDisposition::RetryableBackendFailure
+        );
+        assert_eq!(
+            RefreshStoreError::Backend("redis unavailable".to_owned()).lookup_disposition(),
+            RefreshLookupDisposition::RetryableBackendFailure
+        );
+        assert_eq!(
+            RefreshStoreError::InvalidSchemaConfig.lookup_disposition(),
+            RefreshLookupDisposition::InternalFailure
+        );
+        assert!(
+            !RefreshStoreError::InvalidNamespace.should_treat_as_credential_miss(),
+            "configuration errors should not be hidden as bad user credentials"
+        );
     }
 
     #[tokio::test]
