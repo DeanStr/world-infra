@@ -38,6 +38,21 @@ impl fmt::Display for AuthPrimitiveError {
 
 impl Error for AuthPrimitiveError {}
 
+/// Standard JWT issuer claim name.
+pub const CLAIM_ISSUER: &str = "iss";
+/// Standard JWT audience claim name.
+pub const CLAIM_AUDIENCE: &str = "aud";
+/// Standard JWT subject claim name.
+pub const CLAIM_SUBJECT: &str = "sub";
+/// Product-neutral token-type claim name.
+pub const CLAIM_TOKEN_TYPE: &str = "token_type";
+/// Product-neutral session-version claim name.
+pub const CLAIM_SESSION_VERSION: &str = "session_version";
+/// Product-neutral impersonation actor-id claim name.
+pub const CLAIM_ACTOR_ID: &str = "actor_id";
+/// Product-neutral impersonation actor-session-version claim name.
+pub const CLAIM_ACTOR_SESSION_VERSION: &str = "actor_session_version";
+
 /// Account/session version used for invalidating older credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SessionVersion(u64);
@@ -204,6 +219,34 @@ impl Audience {
     }
 }
 
+/// Validated actor id for bounded impersonation flows.
+///
+/// This preserves the caller-provided value exactly so products can use UUIDs,
+/// stable account ids, or issuer-scoped actor ids. Product authorization,
+/// support-role checks, audit trails, and impersonation duration policy remain
+/// local.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ActorId(String);
+
+impl ActorId {
+    /// Validate an impersonation actor id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthPrimitiveError`] for blank, malformed, or oversized
+    /// actor-id values.
+    pub fn new(value: impl AsRef<str>) -> Result<Self, AuthPrimitiveError> {
+        let value = validate_actor_id(value.as_ref())?;
+        Ok(Self(value.to_owned()))
+    }
+
+    /// Access the actor id.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 fn validate_label<'a>(
     value: &'a str,
     field: &'static str,
@@ -240,6 +283,14 @@ fn validate_jwt_string_or_uri<'a>(
     Ok(value)
 }
 
+fn validate_actor_id(value: &str) -> Result<&str, AuthPrimitiveError> {
+    let value = validate_jwt_string_or_uri(value, "actor_id", 512)?;
+    if value.chars().any(char::is_whitespace) {
+        return Err(AuthPrimitiveError::Invalid { field: "actor_id" });
+    }
+    Ok(value)
+}
+
 /// Shared validation shape for product-owned token claims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthClaimShape {
@@ -260,10 +311,69 @@ impl AuthClaimShape {
         self.token_type.requires_actor_session_version() == self.actor_session_version.is_some()
     }
 
+    /// Return whether this claim is internally consistent with the supplied
+    /// actor id.
+    ///
+    /// This is the safer predicate for products that support impersonation:
+    /// impersonation token types must include both actor id and actor session
+    /// version, while non-impersonation token types must include neither.
+    #[must_use]
+    pub const fn is_consistent_with_actor(&self, actor_id: Option<&ActorId>) -> bool {
+        let requires_actor = self.token_type.requires_actor_session_version();
+        requires_actor == self.actor_session_version.is_some()
+            && requires_actor == actor_id.is_some()
+    }
+
     /// Return whether this claim may be used for bearer API authentication.
     #[must_use]
     pub const fn accepted_as_bearer(&self) -> bool {
         self.token_type.accepted_as_bearer() && self.is_consistent()
+    }
+
+    /// Return whether this claim may be used for bearer API authentication
+    /// when actor id is available separately.
+    #[must_use]
+    pub const fn accepted_as_bearer_with_actor(&self, actor_id: Option<&ActorId>) -> bool {
+        self.token_type.accepted_as_bearer() && self.is_consistent_with_actor(actor_id)
+    }
+}
+
+/// Shared validation shape for impersonation-specific token claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImpersonationClaimShape {
+    /// Token type.
+    pub token_type: TokenType,
+    /// Actor id for support/admin identity.
+    pub actor_id: Option<ActorId>,
+    /// Actor session version for invalidating old impersonation credentials.
+    pub actor_session_version: Option<SessionVersion>,
+}
+
+impl ImpersonationClaimShape {
+    /// Construct an impersonation-claim shape from optional actor fields.
+    #[must_use]
+    pub fn new(
+        token_type: TokenType,
+        actor_id: Option<ActorId>,
+        actor_session_version: Option<SessionVersion>,
+    ) -> Self {
+        Self {
+            token_type,
+            actor_id,
+            actor_session_version,
+        }
+    }
+
+    /// Return whether actor fields are valid for the token type.
+    ///
+    /// Impersonation and impersonation-exchange tokens must include both actor
+    /// id and actor session version. Non-impersonation tokens must include
+    /// neither. Products still own role checks and audit policy.
+    #[must_use]
+    pub const fn is_consistent(&self) -> bool {
+        let requires_actor = self.token_type.requires_actor_session_version();
+        requires_actor == self.actor_id.is_some()
+            && requires_actor == self.actor_session_version.is_some()
     }
 }
 
@@ -303,6 +413,25 @@ pub const fn session_version_is_current(
         session_freshness(token_version, current_version),
         SessionFreshness::Current
     )
+}
+
+/// Compare an actor token session version with the current actor session
+/// version.
+#[must_use]
+pub const fn actor_session_freshness(
+    token_version: SessionVersion,
+    current_version: SessionVersion,
+) -> SessionFreshness {
+    session_freshness(token_version, current_version)
+}
+
+/// Return whether an actor token session version is current.
+#[must_use]
+pub const fn actor_session_version_is_current(
+    token_version: SessionVersion,
+    current_version: SessionVersion,
+) -> bool {
+    session_version_is_current(token_version, current_version)
 }
 
 /// Parsed bearer authorization credential.
@@ -403,6 +532,31 @@ mod tests {
     }
 
     #[test]
+    fn impersonation_claim_shape_requires_actor_id_and_actor_session_version() {
+        let actor_id = ActorId::new("support-admin-1").unwrap();
+        let actor_version = SessionVersion::new(2).unwrap();
+
+        let valid = ImpersonationClaimShape::new(
+            TokenType::Impersonation,
+            Some(actor_id.clone()),
+            Some(actor_version),
+        );
+        assert!(valid.is_consistent());
+
+        let missing_actor_id =
+            ImpersonationClaimShape::new(TokenType::Impersonation, None, Some(actor_version));
+        assert!(!missing_actor_id.is_consistent());
+
+        let missing_actor_version =
+            ImpersonationClaimShape::new(TokenType::Impersonation, Some(actor_id.clone()), None);
+        assert!(!missing_actor_version.is_consistent());
+
+        let access_with_actor =
+            ImpersonationClaimShape::new(TokenType::Access, Some(actor_id), Some(actor_version));
+        assert!(!access_with_actor.is_consistent());
+    }
+
+    #[test]
     fn non_impersonation_claim_rejects_actor_session_version() {
         let claim = AuthClaimShape {
             token_type: TokenType::Access,
@@ -431,8 +585,45 @@ mod tests {
             session_version: SessionVersion::new(1).unwrap(),
             actor_session_version: Some(SessionVersion::new(2).unwrap()),
         };
+        let actor_id = ActorId::new("support-admin-1").unwrap();
         assert!(valid_impersonation.is_consistent());
         assert!(valid_impersonation.accepted_as_bearer());
+        assert!(!valid_impersonation.accepted_as_bearer_with_actor(None));
+        assert!(valid_impersonation.accepted_as_bearer_with_actor(Some(&actor_id)));
+
+        let access_with_actor = AuthClaimShape {
+            token_type: TokenType::Access,
+            audience: Audience::new("chairman-api").unwrap(),
+            session_version: SessionVersion::new(1).unwrap(),
+            actor_session_version: None,
+        };
+        assert!(!access_with_actor.accepted_as_bearer_with_actor(Some(&actor_id)));
+    }
+
+    #[test]
+    fn actor_ids_claim_names_and_freshness_helpers_are_stable() {
+        let actor_id = ActorId::new("https://support.example.com/actors/1").unwrap();
+        assert_eq!(actor_id.as_str(), "https://support.example.com/actors/1");
+        assert!(ActorId::new(" actor-1 ").is_err());
+        assert!(ActorId::new("support admin").is_err());
+        assert_eq!(CLAIM_ISSUER, "iss");
+        assert_eq!(CLAIM_AUDIENCE, "aud");
+        assert_eq!(CLAIM_SUBJECT, "sub");
+        assert_eq!(CLAIM_TOKEN_TYPE, "token_type");
+        assert_eq!(CLAIM_SESSION_VERSION, "session_version");
+        assert_eq!(CLAIM_ACTOR_ID, "actor_id");
+        assert_eq!(CLAIM_ACTOR_SESSION_VERSION, "actor_session_version");
+        assert_eq!(
+            actor_session_freshness(
+                SessionVersion::new(1).unwrap(),
+                SessionVersion::new(2).unwrap()
+            ),
+            SessionFreshness::Stale
+        );
+        assert!(actor_session_version_is_current(
+            SessionVersion::new(3).unwrap(),
+            SessionVersion::new(3).unwrap()
+        ));
     }
 
     #[test]

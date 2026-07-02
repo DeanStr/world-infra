@@ -7,9 +7,10 @@ Approved
 ## Summary
 
 Create a small auth/security lane for product-neutral authentication mechanics:
-claim vocabulary, strict bearer parsing, password hashing and password-policy
-helpers, opaque refresh-token minting/rotation stores, refresh-cookie/origin
-helpers, and WebSocket auth-frame primitives.
+claim vocabulary, strict bearer parsing, impersonation claim-shape validation,
+password hashing and password-policy helpers, opaque refresh-token
+minting/rotation stores, refresh-cookie/origin helpers, and WebSocket
+auth-frame primitives.
 
 This supersedes the Phase 8 audit's broad auth deferral only for these narrow
 mechanics. It does not approve a shared auth service, shared login UX, shared
@@ -52,12 +53,16 @@ Product-owned:
 Shared:
 
 - strict bearer-header parsing and safe token redaction;
-- token type, issuer/audience, and session-version/freshness value helpers;
+- token type, issuer/audience, claim-name constants, actor id, and
+  session-version/freshness value helpers;
+- impersonation actor-id / actor-session-version shape validation;
 - Argon2 password hashing/verification helpers;
 - configurable password length/common/breach-file validation primitives;
 - opaque refresh-token minting, hashing, TTL clamping, single-use rotation, and
   optional Redis backend mechanics;
 - configurable refresh Redis key version and hash-field names;
+- invalid stored refresh-payload discard disposition helpers; products still
+  own deletion, audit, metrics, and response text;
 - refresh-cookie string construction and trusted-origin exact matching;
 - initial WebSocket auth-frame parsing, auth nonce validation, and small
   control-frame rate-limit vocabulary.
@@ -85,6 +90,25 @@ let store = RedisRefreshStore::new(redis_client, command_timeout)
     .with_config(config);
 ```
 
+```rust
+let shape = ImpersonationClaimShape::new(
+    TokenType::Impersonation,
+    Some(ActorId::new(actor_id)?),
+    Some(actor_session_version),
+);
+assert!(shape.is_consistent());
+```
+
+```rust
+match store.get(refresh_token).await {
+    Err(error) if error.should_discard_stored_payload() => {
+        store.delete(refresh_token).await?;
+        // Force product-owned re-authentication response.
+    }
+    result => { /* product-owned handling */ }
+}
+```
+
 ## Compatibility
 
 - Semver: additive new crates plus additive API in `auth-primitives`.
@@ -93,6 +117,9 @@ let store = RedisRefreshStore::new(redis_client, command_timeout)
   local adapters until a re-login migration is acceptable.
 - Wire format: no shared public API response format. WebSocket helpers parse an
   initial auth frame but products own emitted frame schemas and error payloads.
+- Impersonation: shared helpers only validate claim shape. Products own who may
+  impersonate, maximum duration, actor audit trails, UI warnings, and
+  permission restrictions.
 - SQL: none.
 - Security: shared errors and logs must not include raw bearer, refresh, or
   provider tokens.
@@ -106,8 +133,11 @@ Shared tests:
 - password length, common-password, product-supplied denylist, and malformed
   breach-file handling;
 - Argon2 hash/verify and async wrappers;
+- claim-name constants, actor id validation, impersonation actor-field
+  consistency, actor-session freshness wrappers;
 - refresh-token mint/hash, namespace validation, TTL clamping, set/get/delete,
-  rotate/replay, same-token rotation rejection, configurable key/field schemas;
+  rotate/replay, same-token rotation rejection, configurable key/field schemas,
+  and invalid-stored-payload discard disposition;
 - Redis refresh backend coverage for set/get/delete, rotate/replay, expiry,
   bad stored payload deletion, namespace isolation, and configured `rt:v3`
   field names when `AUTH_REFRESH_REDIS_URL` or `WORLD_INFRA_REDIS_URL` is set;

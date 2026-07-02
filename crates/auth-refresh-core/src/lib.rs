@@ -5,6 +5,12 @@
 //! stores, TTL clamping, and single-use rotation. Products still own account
 //! lookup, cookie policy, access-token signing, session-version invalidation,
 //! and API response shapes.
+//!
+//! When a backend returns [`RefreshStoreError::InvalidStoredSession`], product
+//! adapters should normally delete the token key and force re-authentication:
+//! the stored payload is unusable and should not be retried forever. Keep that
+//! deletion in product code so audit/logging, metrics, and response text stay
+//! product-owned.
 
 use std::{
     collections::HashMap,
@@ -56,6 +62,15 @@ impl fmt::Display for RefreshStoreError {
 }
 
 impl Error for RefreshStoreError {}
+
+impl RefreshStoreError {
+    /// Return whether this error represents an invalid persisted payload that
+    /// a product adapter should usually discard.
+    #[must_use]
+    pub const fn should_discard_stored_payload(&self) -> bool {
+        matches!(self, Self::InvalidStoredSession(_))
+    }
+}
 
 /// Redis key and hash-field schema for refresh-token stores.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -966,6 +981,17 @@ mod tests {
             .with_config(config);
         let key = store.key_for_token("token").unwrap();
         assert!(key.starts_with("app:rt:v3:"));
+    }
+
+    #[test]
+    fn invalid_stored_payload_errors_are_discardable() {
+        assert!(
+            RefreshStoreError::InvalidStoredSession("missing account_id".to_owned())
+                .should_discard_stored_payload()
+        );
+        assert!(!RefreshStoreError::Timeout.should_discard_stored_payload());
+        assert!(!RefreshStoreError::Backend("redis unavailable".to_owned())
+            .should_discard_stored_payload());
     }
 
     #[tokio::test]

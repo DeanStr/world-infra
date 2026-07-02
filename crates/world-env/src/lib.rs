@@ -313,6 +313,65 @@ pub fn optional_lenient_bool(name: impl AsRef<str>) -> Result<Option<bool>, EnvE
         .transpose()
 }
 
+/// Validate an environment-provided runtime namespace.
+///
+/// This helper only enforces product-neutral safety: nonblank, no surrounding
+/// whitespace, no control/whitespace characters, and a bounded length. Products
+/// still own env names, defaulting/fail-open policy, and user-facing error text.
+///
+/// # Errors
+///
+/// Returns [`EnvError::Invalid`] if the namespace is unsafe.
+pub fn parse_namespace(name: impl AsRef<str>, value: impl AsRef<str>) -> Result<String, EnvError> {
+    let name = name.as_ref();
+    let raw = value.as_ref();
+    let trimmed = raw.trim();
+    if raw != trimmed
+        || trimmed.is_empty()
+        || trimmed.len() > 256
+        || trimmed.chars().any(char::is_whitespace)
+        || trimmed.chars().any(char::is_control)
+    {
+        return Err(EnvError::Invalid {
+            name: name.to_owned(),
+            value: raw.to_owned(),
+            message: "expected a nonblank namespace without whitespace or control characters"
+                .to_owned(),
+        });
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Parse an optional environment namespace.
+///
+/// # Errors
+///
+/// Returns [`EnvError::Invalid`] if a present variable is unsafe.
+pub fn optional_namespace(name: impl AsRef<str>) -> Result<Option<String>, EnvError> {
+    let name = name.as_ref();
+    let Some(value) = env::var(name).ok() else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_namespace(name, value).map(Some)
+}
+
+/// Parse an optional environment namespace or use a validated default.
+///
+/// # Errors
+///
+/// Returns [`EnvError::Invalid`] if a present variable or the supplied default
+/// namespace is unsafe.
+pub fn namespace_or(name: impl AsRef<str>, default: impl AsRef<str>) -> Result<String, EnvError> {
+    let name = name.as_ref();
+    match optional_namespace(name)? {
+        Some(namespace) => Ok(namespace),
+        None => parse_namespace(name, default),
+    }
+}
+
 /// Parse a duration from seconds or a compact suffix such as `250ms`, `5s`,
 /// `3m`, or `1h`.
 ///
@@ -509,6 +568,42 @@ mod tests {
         assert_eq!(
             parse_duration("DURATION", "1h").unwrap(),
             Duration::from_secs(3600)
+        );
+        restore_env(key, previous);
+    }
+
+    #[test]
+    fn namespace_parsing_preserves_product_owned_names_and_errors() {
+        assert_eq!(
+            parse_namespace("APP_NAMESPACE", "airline:api/v1").unwrap(),
+            "airline:api/v1"
+        );
+        assert!(matches!(
+            parse_namespace("APP_NAMESPACE", " airline "),
+            Err(EnvError::Invalid { name, value, .. }) if name == "APP_NAMESPACE" && value == " airline "
+        ));
+        assert!(matches!(
+            parse_namespace("APP_NAMESPACE", "bad namespace"),
+            Err(EnvError::Invalid { name, value, .. }) if name == "APP_NAMESPACE" && value == "bad namespace"
+        ));
+
+        let key = "WORLD_ENV_NAMESPACE_TEST";
+        let previous = env::var(key).ok();
+        env::remove_var(key);
+        assert_eq!(optional_namespace(key).unwrap(), None);
+        assert_eq!(namespace_or(key, "chairman").unwrap(), "chairman");
+        env::set_var(key, "   ");
+        assert_eq!(optional_namespace(key).unwrap(), None);
+        assert_eq!(namespace_or(key, "chairman").unwrap(), "chairman");
+        env::set_var(key, " chairman ");
+        assert!(matches!(
+            optional_namespace(key),
+            Err(EnvError::Invalid { name, value, .. }) if name == key && value == " chairman "
+        ));
+        env::set_var(key, "chairman:api");
+        assert_eq!(
+            optional_namespace(key).unwrap(),
+            Some("chairman:api".to_owned())
         );
         restore_env(key, previous);
     }
