@@ -22,6 +22,10 @@ members = [
     "crates/operator-deadletter-core",
     "crates/upload-core",
     "crates/auth-primitives",
+    "crates/auth-password-core",
+    "crates/auth-refresh-core",
+    "crates/auth-http-core",
+    "crates/auth-ws-core",
     "crates/billing-risk-core",
     "crates/notification-lifecycle-core",
 ]

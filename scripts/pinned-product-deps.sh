@@ -60,6 +60,11 @@ cat <<EOF
 #   rev = $rev
 
 # Chairman [workspace.dependencies]
+auth-http-core = { git = "$url", rev = "$rev" }
+auth-password-core = { git = "$url", rev = "$rev" }
+auth-primitives = { git = "$url", rev = "$rev" }
+auth-refresh-core = { git = "$url", rev = "$rev", features = ["redis"] }
+auth-ws-core = { git = "$url", rev = "$rev" }
 delivery-core = { git = "$url", rev = "$rev" }
 event-fanout = { git = "$url", rev = "$rev" }
 http-primitives = { git = "$url", rev = "$rev" }
@@ -91,6 +96,11 @@ world-test-containers = { git = "$url", rev = "$rev", default-features = false, 
 world-test-lite = { git = "$url", rev = "$rev" }
 
 # Airline apps/loco-app dependencies
+auth-http-core = { git = "$url", rev = "$rev" }
+auth-password-core = { git = "$url", rev = "$rev" }
+auth-primitives = { git = "$url", rev = "$rev" }
+auth-refresh-core = { git = "$url", rev = "$rev", features = ["redis"] }
+auth-ws-core = { git = "$url", rev = "$rev" }
 delivery-core = { git = "$url", rev = "$rev" }
 event-fanout = { git = "$url", rev = "$rev" }
 http-primitives = { git = "$url", rev = "$rev" }

@@ -1,0 +1,26 @@
+[package]
+name = "auth-refresh-core"
+description = "Opaque refresh-token minting and rotation stores."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[features]
+default = []
+redis = ["dep:redis", "dep:tokio"]
+
+[dependencies]
+base64 = "0.22"
+rand = "0.8"
+redis = { workspace = true, optional = true }
+sha2.workspace = true
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

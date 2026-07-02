@@ -32,7 +32,11 @@ The post-plan product-hardening additions cover:
 - scoped SQL review linting;
 - operator dead-letter and repair report vocabulary;
 - upload key, content-type, size, and completion-state primitives;
-- small auth claim/session/origin primitives;
+- auth claim/session/origin primitives;
+- password hashing and password-policy helpers;
+- opaque refresh-token minting and single-use rotation stores;
+- HTTP refresh-cookie and trusted-origin helpers;
+- WebSocket authentication handshake and control-frame primitives;
 - provider-neutral billing risk and chargeback evidence helpers;
 - notification lifecycle, recurrence, delivery-version, and broadcast claim
   helpers.

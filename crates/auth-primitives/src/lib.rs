@@ -4,7 +4,7 @@
 //! policy, role semantics, admin authorization, product membership checks, and
 //! entitlements.
 
-use std::{error::Error, fmt, num::NonZeroU64, str::FromStr};
+use std::{error::Error, fmt, str::FromStr};
 
 /// Error returned by auth primitives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub enum AuthPrimitiveError {
         /// Field name.
         field: &'static str,
     },
-    /// Session version must be positive.
+    /// Session version was negative before conversion.
     InvalidSessionVersion,
     /// Token type was unknown.
     UnknownTokenType(String),
@@ -30,7 +30,7 @@ impl fmt::Display for AuthPrimitiveError {
         match self {
             Self::Empty { field } => write!(f, "{field} is empty"),
             Self::Invalid { field } => write!(f, "{field} is invalid"),
-            Self::InvalidSessionVersion => f.write_str("session version must be positive"),
+            Self::InvalidSessionVersion => f.write_str("session version must be non-negative"),
             Self::UnknownTokenType(token_type) => write!(f, "unknown token type {token_type}"),
         }
     }
@@ -38,27 +38,32 @@ impl fmt::Display for AuthPrimitiveError {
 
 impl Error for AuthPrimitiveError {}
 
-/// Positive account/session version used for invalidating older credentials.
+/// Account/session version used for invalidating older credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SessionVersion(NonZeroU64);
+pub struct SessionVersion(u64);
 
 impl SessionVersion {
     /// Construct a session version.
     ///
-    /// # Errors
-    ///
-    /// Returns [`AuthPrimitiveError::InvalidSessionVersion`] for zero.
+    /// This accepts `0` because mature products often start account session
+    /// versions at zero and increment them to revoke older credentials.
     pub const fn new(value: u64) -> Result<Self, AuthPrimitiveError> {
-        match NonZeroU64::new(value) {
-            Some(value) => Ok(Self(value)),
-            None => Err(AuthPrimitiveError::InvalidSessionVersion),
-        }
+        Ok(Self(value))
     }
 
     /// Raw version number.
     #[must_use]
     pub const fn get(self) -> u64 {
-        self.0.get()
+        self.0
+    }
+}
+
+impl TryFrom<i64> for SessionVersion {
+    type Error = AuthPrimitiveError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        let value = u64::try_from(value).map_err(|_| AuthPrimitiveError::InvalidSessionVersion)?;
+        Self::new(value)
     }
 }
 
@@ -74,6 +79,8 @@ pub enum TokenType {
     Impersonation,
     /// One-time exchange code/token.
     Exchange,
+    /// One-time exchange code for bounded admin/support impersonation.
+    ImpersonationExchange,
 }
 
 impl TokenType {
@@ -85,7 +92,20 @@ impl TokenType {
             Self::Refresh => "refresh",
             Self::Impersonation => "impersonation",
             Self::Exchange => "exchange",
+            Self::ImpersonationExchange => "impersonation_exchange",
         }
+    }
+
+    /// Return whether this token type needs an actor session version.
+    #[must_use]
+    pub const fn requires_actor_session_version(self) -> bool {
+        matches!(self, Self::Impersonation | Self::ImpersonationExchange)
+    }
+
+    /// Return whether this token type is acceptable for bearer API auth.
+    #[must_use]
+    pub const fn accepted_as_bearer(self) -> bool {
+        matches!(self, Self::Access | Self::Impersonation)
     }
 }
 
@@ -104,8 +124,61 @@ impl FromStr for TokenType {
             "refresh" => Ok(Self::Refresh),
             "impersonation" => Ok(Self::Impersonation),
             "exchange" => Ok(Self::Exchange),
+            "impersonation_exchange" => Ok(Self::ImpersonationExchange),
             other => Err(AuthPrimitiveError::UnknownTokenType(other.to_owned())),
         }
+    }
+}
+
+/// Validated JWT issuer claim.
+///
+/// JWT `iss` is a case-sensitive `StringOrURI` value. This helper preserves
+/// the caller-provided value exactly and only rejects blank, whitespace-padded,
+/// control-character, or oversized strings.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Issuer(String);
+
+impl Issuer {
+    /// Validate a JWT issuer value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthPrimitiveError`] for blank, malformed, or oversized
+    /// issuer values.
+    pub fn new(value: impl AsRef<str>) -> Result<Self, AuthPrimitiveError> {
+        let value = validate_jwt_string_or_uri(value.as_ref(), "issuer", 512)?;
+        Ok(Self(value.to_owned()))
+    }
+
+    /// Access the issuer value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Validated internal issuer label.
+///
+/// Use this when a product wants a filesystem/log/key-safe issuer label. Use
+/// [`Issuer`] for JWT `iss` values such as `https://api.example.com`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IssuerLabel(String);
+
+impl IssuerLabel {
+    /// Validate an issuer label.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthPrimitiveError`] for blank or unsafe labels.
+    pub fn new(value: impl AsRef<str>) -> Result<Self, AuthPrimitiveError> {
+        let value = validate_label(value.as_ref(), "issuer_label", 256)?;
+        Ok(Self(value.to_owned()))
+    }
+
+    /// Access the issuer label.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -120,21 +193,7 @@ impl Audience {
     ///
     /// Returns [`AuthPrimitiveError`] for blank or unsafe labels.
     pub fn new(value: impl AsRef<str>) -> Result<Self, AuthPrimitiveError> {
-        let value = value.as_ref();
-        if value.chars().any(char::is_control) {
-            return Err(AuthPrimitiveError::Invalid { field: "audience" });
-        }
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(AuthPrimitiveError::Empty { field: "audience" });
-        }
-        if value.len() > 128
-            || value
-                .chars()
-                .any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.')))
-        {
-            return Err(AuthPrimitiveError::Invalid { field: "audience" });
-        }
+        let value = validate_label(value.as_ref(), "audience", 128)?;
         Ok(Self(value.to_owned()))
     }
 
@@ -143,6 +202,42 @@ impl Audience {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+fn validate_label<'a>(
+    value: &'a str,
+    field: &'static str,
+    max_len: usize,
+) -> Result<&'a str, AuthPrimitiveError> {
+    if value.chars().any(char::is_control) {
+        return Err(AuthPrimitiveError::Invalid { field });
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AuthPrimitiveError::Empty { field });
+    }
+    if value.len() > max_len
+        || value
+            .chars()
+            .any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.')))
+    {
+        return Err(AuthPrimitiveError::Invalid { field });
+    }
+    Ok(value)
+}
+
+fn validate_jwt_string_or_uri<'a>(
+    value: &'a str,
+    field: &'static str,
+    max_len: usize,
+) -> Result<&'a str, AuthPrimitiveError> {
+    if value.is_empty() || value.trim().is_empty() {
+        return Err(AuthPrimitiveError::Empty { field });
+    }
+    if value.trim() != value || value.len() > max_len || value.chars().any(char::is_control) {
+        return Err(AuthPrimitiveError::Invalid { field });
+    }
+    Ok(value)
 }
 
 /// Shared validation shape for product-owned token claims.
@@ -162,8 +257,113 @@ impl AuthClaimShape {
     /// Return whether this claim is internally consistent.
     #[must_use]
     pub const fn is_consistent(&self) -> bool {
-        matches!(self.token_type, TokenType::Impersonation) == self.actor_session_version.is_some()
+        self.token_type.requires_actor_session_version() == self.actor_session_version.is_some()
     }
+
+    /// Return whether this claim may be used for bearer API authentication.
+    #[must_use]
+    pub const fn accepted_as_bearer(&self) -> bool {
+        self.token_type.accepted_as_bearer()
+    }
+}
+
+/// Result of comparing a token session version with the current account version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionFreshness {
+    /// Token version equals the current account/session version.
+    Current,
+    /// Token version is older than the current account/session version.
+    Stale,
+    /// Token version is newer than the current account/session version.
+    FromFuture,
+}
+
+/// Compare token and current session versions.
+#[must_use]
+pub const fn session_freshness(
+    token_version: SessionVersion,
+    current_version: SessionVersion,
+) -> SessionFreshness {
+    if token_version.get() == current_version.get() {
+        SessionFreshness::Current
+    } else if token_version.get() < current_version.get() {
+        SessionFreshness::Stale
+    } else {
+        SessionFreshness::FromFuture
+    }
+}
+
+/// Return whether a token version is current.
+#[must_use]
+pub const fn session_version_is_current(
+    token_version: SessionVersion,
+    current_version: SessionVersion,
+) -> bool {
+    matches!(
+        session_freshness(token_version, current_version),
+        SessionFreshness::Current
+    )
+}
+
+/// Parsed bearer authorization credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BearerCredential<'a> {
+    token: &'a str,
+}
+
+impl<'a> BearerCredential<'a> {
+    /// Access the bearer token.
+    #[must_use]
+    pub const fn token(&self) -> &'a str {
+        self.token
+    }
+}
+
+/// Parse an HTTP `Authorization` header as a bearer credential.
+///
+/// The returned token borrows from the input header. This helper is deliberately
+/// strict about scheme shape and blank tokens, while leaving JWT decoding or
+/// opaque-token lookup to product-owned code.
+///
+/// # Errors
+///
+/// Returns [`AuthPrimitiveError`] for missing, non-bearer, or blank values.
+pub fn parse_bearer_authorization(
+    authorization: Option<&str>,
+) -> Result<BearerCredential<'_>, AuthPrimitiveError> {
+    let Some(header) = authorization else {
+        return Err(AuthPrimitiveError::Empty {
+            field: "authorization",
+        });
+    };
+    if header.chars().any(char::is_control) {
+        return Err(AuthPrimitiveError::Invalid {
+            field: "authorization",
+        });
+    }
+    let header = header.trim();
+    if header.is_empty() {
+        return Err(AuthPrimitiveError::Empty {
+            field: "authorization",
+        });
+    }
+    let mut parts = header.splitn(2, char::is_whitespace);
+    let scheme = parts.next().unwrap_or_default();
+    let token = parts.next().unwrap_or_default().trim();
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+        return Err(AuthPrimitiveError::Invalid {
+            field: "authorization",
+        });
+    }
+    if token
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AuthPrimitiveError::Invalid {
+            field: "authorization",
+        });
+    }
+    Ok(BearerCredential { token })
 }
 
 /// Redact an access token or secret for logs.
@@ -228,6 +428,10 @@ mod tests {
             Ok(TokenType::Impersonation)
         );
         assert_eq!("exchange".parse::<TokenType>(), Ok(TokenType::Exchange));
+        assert_eq!(
+            "impersonation_exchange".parse::<TokenType>(),
+            Ok(TokenType::ImpersonationExchange)
+        );
         assert_eq!(TokenType::Refresh.to_string(), "refresh");
         assert_eq!(
             "magic".parse::<TokenType>(),
@@ -239,6 +443,8 @@ mod tests {
     fn audience_and_session_version_validate_edges() {
         let audience = Audience::new(" chairman-api:v1 ").unwrap();
         assert_eq!(audience.as_str(), "chairman-api:v1");
+        let issuer = IssuerLabel::new(" chairman-api ").unwrap();
+        assert_eq!(issuer.as_str(), "chairman-api");
         assert_eq!(
             Audience::new(" "),
             Err(AuthPrimitiveError::Empty { field: "audience" })
@@ -255,10 +461,38 @@ mod tests {
             Audience::new("a".repeat(129)),
             Err(AuthPrimitiveError::Invalid { field: "audience" })
         );
+        assert_eq!(SessionVersion::new(0).unwrap().get(), 0);
         assert_eq!(SessionVersion::new(7).unwrap().get(), 7);
+        assert_eq!(SessionVersion::try_from(7_i64).unwrap().get(), 7);
         assert_eq!(
-            SessionVersion::new(0),
+            SessionVersion::try_from(-1_i64),
             Err(AuthPrimitiveError::InvalidSessionVersion)
+        );
+    }
+
+    #[test]
+    fn issuer_accepts_jwt_string_or_uri_without_normalization() {
+        let uri = Issuer::new("https://api.airlinevibe.com").unwrap();
+        assert_eq!(uri.as_str(), "https://api.airlinevibe.com");
+        let urn = Issuer::new("urn:airline:v1").unwrap();
+        assert_eq!(urn.as_str(), "urn:airline:v1");
+        let label = Issuer::new("chairman-api").unwrap();
+        assert_eq!(label.as_str(), "chairman-api");
+        assert_eq!(
+            Issuer::new(" https://api.airlinevibe.com "),
+            Err(AuthPrimitiveError::Invalid { field: "issuer" })
+        );
+        assert_eq!(
+            Issuer::new("https://api.airlinevibe.com\n"),
+            Err(AuthPrimitiveError::Invalid { field: "issuer" })
+        );
+        assert_eq!(
+            Issuer::new(" "),
+            Err(AuthPrimitiveError::Empty { field: "issuer" })
+        );
+        assert_eq!(
+            Issuer::new("a".repeat(513)),
+            Err(AuthPrimitiveError::Invalid { field: "issuer" })
         );
     }
 
@@ -274,7 +508,7 @@ mod tests {
         );
         assert_eq!(
             AuthPrimitiveError::InvalidSessionVersion.to_string(),
-            "session version must be positive"
+            "session version must be non-negative"
         );
         assert_eq!(
             AuthPrimitiveError::UnknownTokenType("magic".to_owned()).to_string(),
@@ -289,5 +523,81 @@ mod tests {
             "https://evil.example",
             &["https://app.example"]
         ));
+    }
+
+    #[test]
+    fn bearer_authorization_parser_is_strict_but_case_insensitive() {
+        let parsed = parse_bearer_authorization(Some(" bearer   abc.def ")).unwrap();
+        assert_eq!(parsed.token(), "abc.def");
+        assert_eq!(
+            parse_bearer_authorization(None),
+            Err(AuthPrimitiveError::Empty {
+                field: "authorization"
+            })
+        );
+        assert_eq!(
+            parse_bearer_authorization(Some("Basic abc")),
+            Err(AuthPrimitiveError::Invalid {
+                field: "authorization"
+            })
+        );
+        assert_eq!(
+            parse_bearer_authorization(Some("Bearer ")),
+            Err(AuthPrimitiveError::Invalid {
+                field: "authorization"
+            })
+        );
+        assert_eq!(
+            parse_bearer_authorization(Some("Bearer abc\n")),
+            Err(AuthPrimitiveError::Invalid {
+                field: "authorization"
+            })
+        );
+        assert_eq!(
+            parse_bearer_authorization(Some("Bearer abc def")),
+            Err(AuthPrimitiveError::Invalid {
+                field: "authorization"
+            })
+        );
+    }
+
+    #[test]
+    fn claim_shape_and_session_freshness_model_airline_auth_posture() {
+        let access = AuthClaimShape {
+            token_type: TokenType::Access,
+            audience: Audience::new("airline-api").unwrap(),
+            session_version: SessionVersion::new(2).unwrap(),
+            actor_session_version: None,
+        };
+        assert!(access.is_consistent());
+        assert!(access.accepted_as_bearer());
+
+        let refresh = AuthClaimShape {
+            token_type: TokenType::Refresh,
+            audience: Audience::new("airline-api").unwrap(),
+            session_version: SessionVersion::new(2).unwrap(),
+            actor_session_version: None,
+        };
+        assert!(refresh.is_consistent());
+        assert!(!refresh.accepted_as_bearer());
+
+        assert_eq!(
+            session_freshness(
+                SessionVersion::new(1).unwrap(),
+                SessionVersion::new(2).unwrap()
+            ),
+            SessionFreshness::Stale
+        );
+        assert!(session_version_is_current(
+            SessionVersion::new(2).unwrap(),
+            SessionVersion::new(2).unwrap()
+        ));
+        assert_eq!(
+            session_freshness(
+                SessionVersion::new(3).unwrap(),
+                SessionVersion::new(2).unwrap()
+            ),
+            SessionFreshness::FromFuture
+        );
     }
 }

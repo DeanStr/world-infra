@@ -46,9 +46,15 @@ spike; release candidates still require both-product approval.
 | `world-test-containers` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman DB tests | Airline test platform owner |
 | `event-fanout` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Airline event fanout canary | Chairman worker/event owner |
 | `world-cycle-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman cycle canary | Airline cycle owner |
+| `auth-primitives` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman API auth hardening | Airline auth owner |
+| `auth-password-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman real-login implementation | Airline auth owner |
+| `auth-refresh-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman real-login implementation | Airline auth owner |
+| `auth-http-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman real-login implementation | Airline auth owner |
+| `auth-ws-core` | Chairman world-infra DRI | Chairman DRI, Airline reviewer | Chairman WS auth hardening | Airline websocket owner |
 
 ## Boundaries
 
 Keep product policy local: route labels, plan tiers, notification categories,
-auth/session semantics, billing policy, cycle phases, finalization policy, and
-event payload meanings are not shared API.
+login/signup UX, account tables, role checks, product session lifecycle,
+billing policy, cycle phases, finalization policy, and event payload meanings
+are not shared API.

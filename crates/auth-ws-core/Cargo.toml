@@ -1,0 +1,17 @@
+[package]
+name = "auth-ws-core"
+description = "WebSocket authentication handshake and control-frame primitives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+auth-primitives = { version = "0.1.0", path = "../auth-primitives" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

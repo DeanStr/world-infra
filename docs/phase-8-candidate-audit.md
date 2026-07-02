@@ -52,7 +52,7 @@ surface area later.
 | Idempotency runtime backend | Deferred in Phase 8; superseded post-plan | Airline's runtime idempotency is Redis/incarnation-heavy; Chairman is more SQL/request-led. | Phase 8 kept `idempotency-core` as key vocabulary. The later `docs/rfcs/idempotency-runtime-core.md` RFC approves a volatile runtime claim-store crate with Chairman adoption deferred. |
 | Tiny SQLSTATE/error classification helper | Watchlist | Both products may repeat narrow database error classification, but a broad DB helper remains too risky. | Collect duplicates while doing product work; extract only after at least two identical product call sites and product-neutral tests exist. |
 | Ledger conventions | Audit only | Finance and ledger authority are still product-domain heavy. | Audit amount-sign, ledger-kind, and registry patterns. Do not add `ledger-core` unless both products expose a shared convention independent of game/business policy. |
-| Auth/commercial-risk helpers | Out of scope | These are product security and business posture, not generic world infrastructure. | Keep outside Phase 8 unless a dedicated security/policy phase is explicitly approved. |
+| Auth/commercial-risk helpers | Split | Broad auth and commercial policy remain product-owned. Narrow auth mechanics were approved after Phase 8 in `docs/rfcs/auth-security-primitives.md`; commercial-risk helpers remain outside world infrastructure unless separately approved. | Use the auth RFC for the approved security-primitives lane. Do not infer approval for shared auth service, login UX, account tables, role policy, entitlement policy, or billing policy. |
 
 ## Product-First Work
 
