@@ -946,6 +946,10 @@ mod tests {
         assert_eq!(origin.scheme, "https");
         assert_eq!(origin.host, "example.com");
         assert_eq!(origin.port, Some(443));
+
+        let origins = parse_allowed_origins("https://Example.COM, wss://API.Example.COM").unwrap();
+        assert_eq!(origins[0].host, "example.com");
+        assert_eq!(origins[1].host, "api.example.com");
     }
 
     #[test]

@@ -544,4 +544,40 @@ fn query() {
         "#;
         assert!(scan_source(source, &config).unwrap().is_empty());
     }
+
+    #[test]
+    fn trailing_allow_comment_after_escaped_string_suppresses_current_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r#"
+            sqlx::query("select \"// not a lint comment\" from world_cycle_jobs").fetch_all(&self.pool) // scoped-sqlx-lint: allow reviewed global query
+                .await?;
+        "#;
+        assert!(scan_source(source, &config).unwrap().is_empty());
+    }
+
+    #[test]
+    fn allow_marker_inside_byte_string_comment_text_does_not_suppress_next_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r#"
+            let marker = b"// scoped-sqlx-lint: allow";
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool)
+                .await?;
+        "#;
+        let findings = scan_source(source, &config).unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn allow_marker_inside_raw_byte_string_comment_text_does_not_suppress_next_line() {
+        let config = ScopedSqlLintConfig::new(["world_cycle_jobs"]);
+        let source = r##"
+            let marker = br#"// scoped-sqlx-lint: allow"#;
+            sqlx::query("select * from world_cycle_jobs")
+                .fetch_all(&self.pool)
+                .await?;
+        "##;
+        let findings = scan_source(source, &config).unwrap();
+        assert_eq!(findings.len(), 1);
+    }
 }

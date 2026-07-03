@@ -582,11 +582,20 @@ mod tests {
         assert!(TrustedOriginPolicy::new(["https://app.example.com/"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://user@app.example.com"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://[not-ip]"]).is_err());
+        assert!(TrustedOriginPolicy::new(["https://[::1]:0"]).is_err());
         assert!(TrustedOriginPolicy::new(["https://[::1]:443"]).is_ok());
         assert!(TrustedOriginPolicy::new(["HTTPS://APP.EXAMPLE.COM"]).is_ok());
 
         let policy = TrustedOriginPolicy::new(["https://app.example.com"]).unwrap();
         assert!(!policy.is_trusted(Some("https://app.example.com/"), None));
+    }
+
+    #[test]
+    fn trusted_origin_policy_distinguishes_origin_from_referer_urls() {
+        let policy = TrustedOriginPolicy::new(["https://app.example.com"]).unwrap();
+        assert!(!policy.is_trusted(Some("https://app.example.com/"), None));
+        assert!(policy.is_trusted(None, Some("https://app.example.com/")));
+        assert!(policy.is_trusted(None, Some("https://app.example.com/account?tab=security")));
     }
 
     #[test]

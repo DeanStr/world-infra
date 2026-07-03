@@ -872,6 +872,7 @@ mod tests {
             "https://a-.example",
             "https://a_b.example",
             "https://example.com:0",
+            "https://[2001:db8::1]:0",
         ] {
             assert!(
                 matches!(
