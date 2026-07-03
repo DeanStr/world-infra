@@ -1,0 +1,17 @@
+[package]
+name = "auth-device-core"
+description = "Product-neutral device identity and session-label helpers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+hex = "0.4"
+hmac = "0.12"
+sha2.workspace = true
+
+[lints]
+workspace = true

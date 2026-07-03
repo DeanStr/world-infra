@@ -126,6 +126,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "auth-device-core"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hmac",
+ "sha2",
+]
+
+[[package]]
 name = "auth-http-core"
 version = "0.1.0"
 dependencies = [
@@ -147,6 +156,16 @@ dependencies = [
 [[package]]
 name = "auth-primitives"
 version = "0.1.0"
+
+[[package]]
+name = "auth-recovery-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "rand 0.8.6",
+ "sha2",
+]
 
 [[package]]
 name = "auth-refresh-core"
